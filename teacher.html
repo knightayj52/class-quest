@@ -1,0 +1,290 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>학급 성장 기록 · 교사 콘솔</title>
+<link href="https://fonts.googleapis.com/css2?family=Jua&display=swap" rel="stylesheet">
+<style>
+*{box-sizing:border-box}
+body{margin:0;font-family:'Jua','Apple SD Gothic Neo',sans-serif;background:#f6f1ff;color:#4b3a5a;padding-bottom:70px}
+header{background:#fff;border-bottom:3px solid #4b3a5a;padding:11px 14px;display:flex;justify-content:space-between;align-items:center;position:sticky;top:0;z-index:9}
+h1{font-size:18px;margin:0}
+.wrap{max-width:720px;margin:0 auto;padding:12px}
+.card{background:#fff;border:2.5px solid #4b3a5a;border-radius:16px;padding:12px 14px;margin-bottom:11px;box-shadow:3px 3px 0 #4b3a5a}
+.row{display:flex;gap:7px;align-items:center;flex-wrap:wrap}
+input,select,textarea{font-family:inherit;font-size:15px;border:2px solid #b8a8d9;border-radius:10px;padding:8px 10px;flex:1;min-width:0;background:#fff;color:#4b3a5a}
+textarea{width:100%;min-height:60px}
+button{font-family:inherit;font-size:15px;border:2.5px solid #4b3a5a;border-radius:12px;padding:8px 13px;background:#ffd93e;cursor:pointer;box-shadow:2px 2px 0 #4b3a5a;color:#4b3a5a}
+button.ok{background:#52d0a8;color:#fff} button.no{background:#fff} button.pink{background:#ff6b81;color:#fff}
+button.big{width:100%;padding:12px;font-size:16px;margin-top:7px}
+button:active{transform:translate(2px,2px);box-shadow:none}
+nav{position:fixed;bottom:0;left:0;right:0;background:#fff;border-top:3px solid #4b3a5a;display:flex;z-index:9}
+nav div{flex:1;text-align:center;padding:9px 1px;font-size:11px;cursor:pointer;position:relative}
+nav div.on{background:#ff6b81;color:#fff}
+nav div b{display:block;font-size:19px;font-weight:normal}
+nav .dot{position:absolute;top:4px;right:calc(50% - 20px);background:#ff3b5c;color:#fff;border-radius:999px;font-size:10px;padding:1px 5px}
+.item{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:8px 0;border-bottom:1px dashed #ded5f0}
+.item:last-child{border-bottom:0}
+.small{font-size:12.5px;color:#8a7ba0}
+.badge{display:inline-block;background:#efe9ff;border-radius:999px;padding:2px 8px;font-size:11.5px;margin-left:4px}
+.goal{height:14px;background:#efe9ff;border:2px solid #4b3a5a;border-radius:999px;overflow:hidden;margin-top:6px}
+.goal>div{height:100%;background:linear-gradient(90deg,#ffd93e,#ff6b81)}
+table{width:100%;border-collapse:collapse;font-size:14px}
+th,td{padding:5px 3px;text-align:center;border-bottom:1px solid #e8e0f5}
+th{background:#f3eeff;font-size:12.5px}
+td.nm{text-align:left;white-space:nowrap;font-size:13.5px}
+.gbtn{border:2px solid #b8a8d9;border-radius:9px;padding:5px 0;width:100%;background:#fff;font-size:13px;box-shadow:none;cursor:pointer}
+.gbtn.o{background:#52d0a8;color:#fff;border-color:#4b3a5a}
+.gbtn.b{background:#ffd93e;border-color:#4b3a5a}
+.gbtn.x{background:#e8e0f5;color:#9a8bb0}
+.chk{display:flex;flex-wrap:wrap;gap:5px;margin-top:6px}
+.chk label{border:2px solid #b8a8d9;border-radius:999px;padding:5px 10px;font-size:13.5px;cursor:pointer}
+.chk input{display:none}
+.chk input:checked+span{color:#ff6b81;font-weight:bold}
+.chk label:has(input:checked){background:#ffe9ee;border-color:#ff6b81}
+#toast{position:fixed;left:50%;bottom:78px;transform:translateX(-50%);background:#4b3a5a;color:#fff;padding:9px 20px;border-radius:999px;opacity:0;transition:.3s;pointer-events:none;z-index:20;font-size:14px}
+#toast.show{opacity:1}
+</style>
+</head>
+<body>
+<header><h1 id="appTitle">👩‍🏫 교사 콘솔</h1><div class="row"><span class="small" id="cls"></span><button id="btnRefresh">🔄</button></div></header>
+<div class="wrap">
+  <div class="card" id="setup" style="display:none">
+    <div class="small">앱스크립트 웹앱 URL과 [설정] 탭의 교사키를 한 번만 입력하세요</div>
+    <div class="row" style="margin-top:8px"><input id="api" placeholder="https://script.google.com/macros/s/.../exec"></div>
+    <div class="row" style="margin-top:7px"><input id="key" placeholder="교사키"><button id="btnSave">저장</button></div>
+  </div>
+  <div id="view"></div>
+</div>
+<nav id="nav">
+  <div data-t="pending" class="on"><b>📋</b>승인</div>
+  <div data-t="grid"><b>📓</b>공책검사</div>
+  <div data-t="award"><b>⭐</b>수여</div>
+  <div data-t="quest"><b>🎯</b>퀘스트</div>
+  <div data-t="shop"><b>🎫</b>쿠폰</div>
+  <div data-t="summary"><b>📊</b>현황</div>
+  <div data-t="brand"><b>⚙️</b>설정</div>
+</nav>
+<div id="toast"></div>
+<script>
+const $=q=>document.querySelector(q), $$=q=>document.querySelectorAll(q);
+let API=localStorage.getItem('lumi_api')||'', KEY=localStorage.getItem('lumi_key')||'';
+let tab='pending', students=[], gridState={};
+let B={app:'우리 반 성장 기록',icon:'🌟',world:'왕국',mission:'임무',gold:'골드',shop:'학급 상점',cls:''};
+$('#api').value=API; $('#key').value=KEY;
+if(!API||!KEY) $('#setup').style.display='block';
+$('#btnSave').onclick=()=>{API=$('#api').value.trim();KEY=$('#key').value.trim();
+  localStorage.setItem('lumi_api',API);localStorage.setItem('lumi_key',KEY);$('#setup').style.display='none';boot();};
+$('#btnRefresh').onclick=()=>load();
+$$('#nav div').forEach(t=>t.onclick=()=>{$$('#nav div').forEach(x=>x.classList.remove('on'));t.classList.add('on');tab=t.dataset.t;load();});
+function applyBrand(){
+  $('#appTitle').textContent='👩‍🏫 '+B.app+' 콘솔';
+  $('#cls').textContent=B.cls||'';
+  document.title=B.app+' · 교사 콘솔';
+}
+function toast(m){const t=$('#toast');t.textContent=m;t.classList.add('show');setTimeout(()=>t.classList.remove('show'),1900);}
+async function get(p){const r=await fetch(API+'?'+new URLSearchParams({...p,key:KEY}));return r.json();}
+async function post(b){const r=await fetch(API,{method:'POST',body:JSON.stringify({...b,key:KEY})});return r.json();}
+const STATS=[['lead','👑 리더십'],['wis','📖 지혜'],['kind','🌷 친절'],['charm','💖 매력'],['grit','⚡ 끈기']];
+
+async function boot(){
+  if(!API||!KEY){$('#setup').style.display='block';return;}
+  try{const d=await get({action:'ping'}); if(d.brand){B=d.brand;} applyBrand();}catch(e){}
+  try{const s=await get({action:'students'}); if(s.ok) students=s.list;}catch(e){}
+  badges(); load();
+}
+async function badges(){
+  try{const d=await get({action:'summary'}); if(!d.ok)return;
+    const set=(t,n)=>{const el=document.querySelector('#nav div[data-t="'+t+'"]');
+      el.querySelector('.dot')?.remove();
+      if(n>0){const s=document.createElement('span');s.className='dot';s.textContent=n;el.appendChild(s);}};
+    set('pending',d.pending); set('shop',d.orders);
+  }catch(e){}
+}
+async function load(){
+  if(!API||!KEY){$('#setup').style.display='block';return;}
+  $('#view').innerHTML='<div class="card">불러오는 중…</div>';
+  try{ await ({pending:vPending,grid:vGrid,award:vAward,quest:vQuest,shop:vShop,summary:vSummary,brand:vBrand})[tab](); }
+  catch(e){ $('#view').innerHTML='<div class="card">오류: '+e+'</div>'; }
+}
+function stuChecks(){
+  return '<div class="chk" id="stuChk">'+students.map(s=>
+    '<label><input type="checkbox" value="'+s.id+'"><span>'+s.name+'</span></label>').join('')
+    +'</div><div class="row" style="margin-top:6px"><button id="selAll" class="no">전체 선택</button><button id="selNone" class="no">해제</button></div>';
+}
+function bindSel(){
+  $('#selAll').onclick=()=>$$('#stuChk input').forEach(c=>c.checked=true);
+  $('#selNone').onclick=()=>$$('#stuChk input').forEach(c=>c.checked=false);
+}
+const picked=()=>[...$$('#stuChk input:checked')].map(c=>c.value);
+
+/* ── 승인 ── */
+async function vPending(){
+  const d=await get({action:'pending'}); if(!d.ok) throw d.error;
+  if(!d.list.length){$('#view').innerHTML='<div class="card">✅ 승인 대기 중인 미션이 없어요</div>';return;}
+  const by={}; d.list.forEach(x=>{(by[x.name]=by[x.name]||[]).push(x)});
+  let h='<button class="big ok" id="allOk">전체 승인 ('+d.list.length+'건)</button>';
+  for(const n in by){
+    h+='<div class="card"><b>'+n+'</b><span class="badge">'+by[n].length+'건</span>';
+    by[n].forEach(x=>h+='<div class="item"><div>'+x.missionName
+      +'<div class="small">'+x.date+' · '+x.xp+'XP · '+x.coins+'G'+(x.stat?' · '+x.stat:'')+'</div></div>'
+      +'<div class="row"><button class="ok" data-row="'+x.row+'" data-s="승인">승인</button>'
+      +'<button class="no" data-row="'+x.row+'" data-s="반려">반려</button></div></div>');
+    h+='</div>';
+  }
+  $('#view').innerHTML=h;
+  $('#allOk').onclick=async()=>{await post({action:'approve',rows:d.list.map(x=>({row:x.row,status:'승인'}))});toast('전체 승인 완료');badges();load();};
+  $$('[data-row]').forEach(b=>b.onclick=async()=>{await post({action:'approve',rows:[{row:+b.dataset.row,status:b.dataset.s}]});toast(b.dataset.s);badges();load();});
+}
+
+/* ── 배움공책 검사 격자 ── */
+async function vGrid(){
+  const d=await get({action:'grid'}); if(!d.ok) throw d.error;
+  gridState={};
+  let h='<div class="card"><b>📓 배움공책 검사</b> <span class="small">'+d.date+'</span>'
+    +'<div class="small" style="margin-top:3px">칸을 누르면 <b>O → 우수 → X → 취소</b> 순으로 바뀌어요. 우수는 지혜 +1</div></div>'
+    +'<div class="card" style="overflow-x:auto"><table><tr><th>이름</th>'
+    +d.cols.map(c=>'<th>'+c.e+'<br>'+c.subject+'</th>').join('')+'</tr>';
+  d.rows.forEach(r=>{
+    h+='<tr><td class="nm">'+r.name+'</td>';
+    d.cols.forEach(c=>{
+      const cur=r.cell[c.id];
+      let g=''; if(cur){ g = cur.grade || (cur.status==='검사완료'?'O':''); }
+      h+='<td><button class="gbtn '+cls(g)+'" data-id="'+r.id+'" data-m="'+c.id+'" data-g="'+g+'">'+(txt(g))+'</button></td>';
+    });
+    h+='</tr>';
+  });
+  $('#view').innerHTML=h+'</table></div><button class="big ok" id="gSave">💾 검사 결과 저장</button>'
+    +'<button class="big no" id="gAllO">전체 O 표시</button>';
+  const cycle={'':'O','O':'우수','우수':'X','X':''};
+  $$('.gbtn').forEach(b=>b.onclick=()=>{
+    const g=cycle[b.dataset.g]; b.dataset.g=g; b.textContent=txt(g); b.className='gbtn '+cls(g);
+    gridState[b.dataset.id+'|'+b.dataset.m]={id:b.dataset.id,mission:b.dataset.m,grade:g};
+  });
+  $('#gAllO').onclick=()=>$$('.gbtn').forEach(b=>{ if(!b.dataset.g){b.dataset.g='O';b.textContent='O';b.className='gbtn o';
+    gridState[b.dataset.id+'|'+b.dataset.m]={id:b.dataset.id,mission:b.dataset.m,grade:'O'};}});
+  $('#gSave').onclick=async()=>{
+    const cells=Object.values(gridState).filter(c=>c.grade);
+    if(!cells.length){toast('변경된 칸이 없어요');return;}
+    const r=await post({action:'gridSave',date:d.date,cells});
+    toast(r.ok?cells.length+'칸 저장 완료':'실패: '+r.error); load();
+  };
+  function txt(g){return g==='우수'?'★':g==='X'?'–':g==='O'?'O':'·';}
+  function cls(g){return g==='우수'?'b':g==='X'?'x':g==='O'?'o':'';}
+}
+
+/* ── 수여/지급 ── */
+async function vAward(){
+  $('#view').innerHTML='<div class="card"><b>⭐ 스탯 수여</b>'
+    +'<div class="small">칭찬·IB 학습자상 등. 학생 게임에 다음 접속 때 반영돼요.</div>'+stuChecks()
+    +'<div class="row" style="margin-top:8px"><select id="stat">'+STATS.map(s=>'<option value="'+s[0]+'">'+s[1]+'</option>').join('')
+    +'</select><select id="val"><option>1</option><option>2</option><option>3</option></select></div>'
+    +'<div class="row" style="margin-top:7px"><input id="reason" placeholder="사유 (예: 탐구하는 사람)"></div>'
+    +'<button class="big" id="btnAward">⭐ 스탯 주기</button></div>'
+    +'<div class="card"><b>🪙 골드 · 경험치 직접 지급</b>'
+    +'<div class="small">보너스나 벌칙(음수 입력 가능)</div>'+stuChecks().replace(/stuChk/g,'stuChk2').replace(/selAll/,'selAll2').replace(/selNone/,'selNone2')
+    +'<div class="row" style="margin-top:8px"><input id="gxp" type="number" placeholder="XP" value="0"><input id="gcoin" type="number" placeholder="골드" value="0"></div>'
+    +'<div class="row" style="margin-top:7px"><input id="greason" placeholder="사유"></div>'
+    +'<button class="big pink" id="btnGive">🪙 지급하기</button></div>';
+  bindSel();
+  $('#selAll2').onclick=()=>$$('#stuChk2 input').forEach(c=>c.checked=true);
+  $('#selNone2').onclick=()=>$$('#stuChk2 input').forEach(c=>c.checked=false);
+  $('#btnAward').onclick=async()=>{
+    const ids=picked(); if(!ids.length){toast('학생을 선택하세요');return;}
+    const r=await post({action:'award',ids,kind:'스탯수여',stat:$('#stat').value,val:+$('#val').value,reason:$('#reason').value});
+    toast(r.ok?ids.length+'명 수여 완료':'실패'); $('#reason').value='';
+  };
+  $('#btnGive').onclick=async()=>{
+    const ids=[...$$('#stuChk2 input:checked')].map(c=>c.value); if(!ids.length){toast('학생을 선택하세요');return;}
+    const r=await post({action:'award',ids,kind:'직접지급',xp:+$('#gxp').value,coins:+$('#gcoin').value,reason:$('#greason').value});
+    toast(r.ok?ids.length+'명 지급 완료':'실패');
+  };
+}
+
+/* ── 개별 퀘스트 ── */
+async function vQuest(){
+  $('#view').innerHTML='<div class="card"><b>🎯 개별 퀘스트 부여</b>'
+    +'<div class="small">선택한 학생에게만 보이는 퀘스트예요.</div>'+stuChecks()
+    +'<div class="row" style="margin-top:8px"><input id="qt" placeholder="제목 (예: 이번 주 발표 1회)"></div>'
+    +'<div class="row" style="margin-top:7px"><textarea id="qd" placeholder="설명"></textarea></div>'
+    +'<div class="row" style="margin-top:7px"><input id="qxp" type="number" value="50" placeholder="XP"><input id="qc" type="number" value="20" placeholder="골드">'
+    +'<select id="qs"><option value="">스탯 없음</option>'+STATS.map(s=>'<option value="'+s[0]+'">'+s[1]+'</option>').join('')+'</select></div>'
+    +'<div class="row" style="margin-top:7px"><input id="qdue" type="date"></div>'
+    +'<button class="big" id="btnAssign">🎯 퀘스트 주기</button></div>';
+  bindSel();
+  $('#btnAssign').onclick=async()=>{
+    const ids=picked(); if(!ids.length){toast('학생을 선택하세요');return;}
+    if(!$('#qt').value.trim()){toast('제목을 입력하세요');return;}
+    const r=await post({action:'assign',ids,title:$('#qt').value,desc:$('#qd').value,
+      xp:+$('#qxp').value,coins:+$('#qc').value,stat:$('#qs').value,due:$('#qdue').value});
+    toast(r.ok?ids.length+'명에게 부여 완료':'실패'); $('#qt').value='';$('#qd').value='';
+  };
+}
+
+/* ── 쿠폰 사용 처리 ── */
+async function vShop(){
+  const d=await get({action:'orders'}); if(!d.ok) throw d.error;
+  if(!d.list.length){$('#view').innerHTML='<div class="card">🎫 사용 처리할 쿠폰이 없어요</div>';return;}
+  let h='<div class="card"><b>🎫 '+B.shop+' · 구매한 쿠폰</b><div class="small">아이가 쿠폰을 쓰면 [사용 완료]를 눌러주세요</div>';
+  d.list.forEach(o=>h+='<div class="item"><div>'+o.name+' · '+o.item+'<div class="small">'+o.date+' · '+o.price+'G</div></div>'
+    +'<button class="ok" data-row="'+o.row+'">사용 완료</button></div>');
+  $('#view').innerHTML=h+'</div>';
+  $$('[data-row]').forEach(b=>b.onclick=async()=>{await post({action:'useOrder',rows:[+b.dataset.row]});toast('사용 처리');badges();load();});
+}
+
+/* ── 현황 ── */
+async function vSummary(){
+  const d=await get({action:'summary'}); if(!d.ok) throw d.error;
+  let h='';
+  if(d.goal){const pct=Math.min(100,d.goal.current/d.goal.target*100);
+    h+='<div class="card"><b>🏰 '+d.goal.name+'</b><div class="small">'+d.goal.current+' / '+d.goal.target+' · '+d.goal.reward+'</div>'
+      +'<div class="goal"><div style="width:'+pct+'%"></div></div></div>';}
+  h+='<div class="card"><b>📢 '+B.world+' 공지</b><textarea id="ntc" placeholder="게임 접속 시 아이들에게 보여요"></textarea>'
+    +'<button class="big" id="btnNtc">공지 저장</button></div>';
+  h+='<div class="card"><b>📅 '+d.date+'</b><table><tr><th>이름</th><th>오늘</th><th>이번주</th><th>누적</th><th>XP</th></tr>';
+  d.list.sort((a,b)=>b.week-a.week).forEach(s=>h+='<tr><td class="nm"><a href="#" data-sid="'+s.id+'">'+s.name+'</a></td><td>'+s.today+'</td><td>'+s.week+'</td><td>'+s.total+'</td><td>'+s.xp+'</td></tr>');
+  $('#view').innerHTML=h+'</table><div class="small" style="margin-top:6px">이름을 누르면 개인 프로필을 봐요</div></div>';
+  $('#btnNtc').onclick=async()=>{await post({action:'notice',text:$('#ntc').value});toast('공지 저장');};
+  $$('[data-sid]').forEach(a=>a.onclick=async e=>{e.preventDefault();
+    const p=await get({action:'profile',id:a.dataset.sid}); if(!p.ok){toast(p.error);return;}
+    let h2='<div class="card"><b>'+p.name+' 프로필</b><div class="small">'+p.id+'</div>'
+      +'<div style="margin-top:8px"><b>스탯</b><table>'+STATS.map(s=>'<tr><td class="nm">'+s[1]+'</td><td>'+(p.stats[s[0]]||0)+'</td></tr>').join('')+'</table></div>'
+      +'<div style="margin-top:8px"><b>미션 수행</b><table><tr><th>미션</th><th>횟수</th><th>우수</th></tr>'
+      +p.missions.map(m=>'<tr><td class="nm">'+m.name+'</td><td>'+m.n+'</td><td>'+m.best+'</td></tr>').join('')+'</table></div>'
+      +(p.awards.length?'<div style="margin-top:8px"><b>수여 기록</b>'+p.awards.slice(-10).reverse().map(a=>'<div class="item"><div>'+(a.reason||a.kind)+'<div class="small">'+a.date+'</div></div><div>'+(a.stat||'')+(a.val?' +'+a.val:'')+'</div></div>').join('')+'</div>':'')
+      +'<button class="big no" id="back">← 목록으로</button></div>';
+    $('#view').innerHTML=h2; $('#back').onclick=()=>load();
+  });
+}
+/* ── 앱 이름·용어 설정 ── */
+async function vBrand(){
+  const d=await get({action:'brand'}); if(d.ok&&d.brand) B=d.brand;
+  const f=(id,label,val,ph)=>'<div class="row" style="margin-top:8px"><div style="width:78px;font-size:13.5px">'+label+'</div>'
+    +'<input id="'+id+'" value="'+(val||'').replace(/"/g,'&quot;')+'" placeholder="'+ph+'"></div>';
+  $('#view').innerHTML='<div class="card"><b>⚙️ 앱 이름 · 용어 설정</b>'
+    +'<div class="small">여기서 바꾸면 학생 화면과 이 콘솔에 모두 반영돼요. 학급 세계관에 맞게 자유롭게 정하세요.</div>'
+    +f('bApp','앱 이름',B.app,'예: 4-2 성장 기록')
+    +f('bIcon','아이콘',B.icon,'이모지 1개')
+    +f('bWorld','세계관',B.world,'예: 왕국, 마을, 우주')
+    +f('bMission','미션 명칭',B.mission,'예: 임무, 퀘스트, 오늘 할 일')
+    +f('bGold','화폐 명칭',B.gold,'예: 골드, 별, 씨앗')
+    +f('bShop','상점 명칭',B.shop,'예: 학급 상점, 보물 창고')
+    +f('bCls','학급명',B.cls,'예: 4학년 2반')
+    +'<button class="big ok" id="bSave">💾 저장</button></div>'
+    +'<div class="card"><b>미리보기</b><div class="small" style="margin-top:6px" id="prev"></div></div>';
+  const prev=()=>{$('#prev').innerHTML=
+    $('#bIcon').value+' <b>'+$('#bApp').value+'</b> · '+$('#bCls').value+'<br>'
+    +'오늘의 '+$('#bMission').value+' · '+$('#bShop').value+' · '+$('#bGold').value+' 120개 · '+$('#bWorld').value+' 공지';};
+  ['bApp','bIcon','bWorld','bMission','bGold','bShop','bCls'].forEach(id=>$('#'+id).oninput=prev);
+  prev();
+  $('#bSave').onclick=async()=>{
+    const r=await post({action:'setBrand',app:$('#bApp').value,icon:$('#bIcon').value,world:$('#bWorld').value,
+      mission:$('#bMission').value,gold:$('#bGold').value,shop:$('#bShop').value,cls:$('#bCls').value});
+    if(r.ok){B=r.brand;applyBrand();toast('저장 완료! 학생 화면에도 반영돼요');}else toast('실패: '+r.error);
+  };
+}
+boot();
+</script>
+</body>
+</html>
