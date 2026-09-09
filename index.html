@@ -5257,7 +5257,7 @@ let SB = {app:'우리 반 성장 기록', icon:'🌟', world:'왕국', mission:'
 let SCH = null;          // 오늘 데이터 캐시
 let schBusy = false;
 
-/* ── 상태 확장 (기존 S에 school 칸만 추가) ── */
+/* -- 상태 확장 (기존 S에 school 칸만 추가) -- */
 function schInit(){
   if(!S) return;
   if(!S.school) S.school = {id:null, pin:null, name:'', pts:0, job:'adventurer', jobLv:0, lastSync:null};
@@ -5265,7 +5265,7 @@ function schInit(){
 }
 const schLogged = () => !!(S && S.school && S.school.id);
 
-/* ── 통신 ── */
+/* -- 통신 -- */
 async function schGet(params){
   const url = SCHOOL_API + '?' + new URLSearchParams(params);
   const r = await fetch(url); return r.json();
@@ -5276,7 +5276,7 @@ async function schPost(body){
 }
 function schAuth(){ return {id:S.school.id, pin:S.school.pin}; }
 
-/* ── 로그인 ── */
+/* -- 로그인 -- */
 function openSchoolLogin(){
   schInit();
   openModal('🏫 우리 반 로그인', `
@@ -5318,30 +5318,47 @@ function schLogout(){
   SCH = null; saveGame(); closeModal(); toast('로그아웃했어요');
 }
 
-/* ── 오늘의 임무 화면 ── */
+/* -- 오늘의 임무 (캐시 먼저 표시 -> 뒤에서 갱신) -- */
+function schCacheKey(){ return 'schCache_' + (S && S.school ? S.school.id : ''); }
+function schSaveCache(d){ try{ localStorage.setItem(schCacheKey(), JSON.stringify(d)); }catch(e){} }
+function schLoadCache(){
+  try{
+    const o = JSON.parse(localStorage.getItem(schCacheKey()) || 'null');
+    const today = new Date(); const p = n => String(n).padStart(2,'0');
+    const ds = today.getFullYear() + '-' + p(today.getMonth()+1) + '-' + p(today.getDate());
+    return (o && o.date === ds) ? o : null;
+  }catch(e){ return null; }
+}
 async function openSchoolMissions(){
   schInit();
   if(!schLogged()){ openSchoolLogin(); return; }
-  openModal(SB.icon + ' 오늘의 ' + SB.mission, '<div class="card small" style="text-align:center;padding:24px">불러오는 중…</div>');
+  const cached = SCH || schLoadCache();
+  openModal(SB.icon + ' 오늘의 ' + SB.mission,
+    cached ? '' : '<div class="card small" style="text-align:center;padding:24px">불러오는 중...</div>');
+  if(cached){ SCH = cached; renderSchoolMissions(cached, true); }
   try{
     const d = await schGet({action:'today', ...schAuth()});
-    if(!d.ok){ document.getElementById('mbody').innerHTML =
-      `<div class="card small" style="text-align:center;padding:20px">❌ ${d.error}
-       <button id="schRe" class="btn" style="margin-top:12px">다시 로그인</button></div>`;
-      document.getElementById('schRe').addEventListener('pointerdown', openSchoolLogin); return; }
+    if(!d.ok){
+      document.getElementById('mbody').innerHTML =
+        '<div class="card small" style="text-align:center;padding:20px">' + d.error +
+        '<button id="schRe" class="btn" style="margin-top:12px">다시 로그인</button></div>';
+      document.getElementById('schRe').addEventListener('pointerdown', openSchoolLogin); return;
+    }
     SCH = d; if(d.brand) SB = d.brand;
-    await schPayout(d);                 // 승인된 보상 먼저 지급
+    schSaveCache(d);
+    await schPayout(d);
     renderSchoolMissions(d);
   }catch(e){
-    document.getElementById('mbody').innerHTML =
-      '<div class="card small" style="text-align:center;padding:20px">인터넷 연결을 확인해 주세요 📡</div>';
+    if(!cached) document.getElementById('mbody').innerHTML =
+      '<div class="card small" style="text-align:center;padding:20px">인터넷 연결을 확인해 주세요</div>';
+    else toast('최신 정보를 못 받았어요');
   }
 }
 
-function renderSchoolMissions(d){
+function renderSchoolMissions(d, stale){
   const S_ = st => ({'없음':'', '자동':'✅ 완료', '대기':'⏳ 선생님 확인 중', '검사대기':'⏳ 검사 기다리는 중',
                      '승인':'✅ 완료', '검사완료':'✅ 완료', '반려':'다시 해볼까요'})[st] || '';
-  let h = '';
+  let h = stale ? '<div class="small" style="text-align:center;color:#a99bc0;padding:2px">최신 정보 확인 중...</div>' : '';
   if(d.notice) h += `<div class="card" style="padding:12px;background:#fff6df;border-color:#e8c86a">📢 ${d.notice}</div>`;
   if(d.goal){
     const pct = Math.min(100, d.goal.current / d.goal.target * 100);
@@ -5397,47 +5414,69 @@ function renderSchoolMissions(d){
   document.getElementById('schOut').addEventListener('click', e => { e.preventDefault(); schLogout(); });
 }
 
-/* ── 미션 완료 신청 ── */
+/* -- 미션 완료 신청 (낙관적 UI: 화면 먼저, 서버는 뒤에서) -- */
 async function schComplete(mid, btn){
-  if(schBusy) return; schBusy = true;
-  if(btn){ btn.textContent = '…'; btn.disabled = true; }
+  if(schBusy) return;
+  const mi = SCH && SCH.missions.find(x => x.id === mid);
+  if(!mi) return;
+  schBusy = true;
+  const instant = mi.type === '즉시';
+  if(btn){
+    btn.outerHTML = '<div class="small" style="white-space:nowrap;text-align:right">'
+      + (instant ? '완료' : '보내는 중...') + '</div>';
+  }
+  if(instant){
+    applyReward({xp:mi.xp, coins:mi.coins});
+    sYes(); confetti(14); toast('완료! ' + mi.name);
+    mi.status = '자동'; schSaveCache(SCH);
+  }
   try{
     const r = await schPost({action:'complete', ...schAuth(), mission:mid});
-    if(!r.ok){ toast('⚠️ ' + r.error); sNo(); }
-    else if(r.status === '자동'){
-      applyReward({xp:r.reward.xp, coins:r.reward.coins});
-      sYes(); confetti(14); toast('🎉 ' + SB.mission + ' 완료!');
+    if(!r.ok){
+      toast('다시 해볼까요: ' + r.error); sNo();
+      if(instant) applyReward({xp:-mi.xp, coins:-mi.coins});
+      mi.status = '없음';
     } else {
-      sYes(); toast('📨 선생님께 보냈어요! 확인되면 보상을 받아요');
+      mi.status = r.status;
+      if(!instant){ sYes(); toast('선생님께 보냈어요!'); }
     }
-    openSchoolMissions();
-  }catch(e){ toast('연결에 실패했어요 📡'); }
+    schSaveCache(SCH); renderSchoolMissions(SCH);
+  }catch(e){
+    toast('연결에 실패했어요');
+    if(instant) applyReward({xp:-mi.xp, coins:-mi.coins});
+    mi.status = '없음'; renderSchoolMissions(SCH);
+  }
   finally{ schBusy = false; }
 }
 
-/* ── 승인된 보상 지급 (중복 방지: 서버에 claim) ── */
+/* -- 승인된 보상 지급 (합산 적용 + claim 한 번에) -- */
 async function schPayout(d){
   const jobs = [];
   (d.unclaimed || []).forEach(u => jobs.push({type:'log', row:u.row,
-    xp:u.xp, coins:u.coins, stat:u.stat, label:u.missionName + (u.grade === '우수' ? ' ⭐우수' : '')}));
+    xp:u.xp, coins:u.coins, stat:u.stat, label:u.missionName}));
   (d.awards || []).forEach(a => jobs.push({type:'award', row:a.row,
     xp:a.xp, coins:a.coins, stat:a.stat, val:a.val, label:a.reason || a.kind}));
   (d.personalDone || []).forEach(p => jobs.push({type:'personal', row:p.row,
     xp:p.xp, coins:p.coins, stat:p.stat, label:p.title}));
   if(!jobs.length) return;
-  for(const j of jobs){
-    const rw = {};
-    if(j.xp) rw.xp = j.xp;
-    if(j.coins) rw.coins = j.coins;
-    if(j.stat && (j.val || j.type !== 'award')) rw.stats = {[j.stat]: j.val || 1};
-    applyReward(rw);
-    try{ await schPost({action:'claim', ...schAuth(), type:j.type, row:j.row}); }catch(e){}
-  }
-  confetti(26);
-  banner('보상이 도착했어요! 🎁', jobs.map(j => j.label).slice(0,3).join(', ') + (jobs.length > 3 ? ' 외 ' + (jobs.length-3) + '건' : ''));
+  const total = {xp:0, coins:0, stats:{}};
+  jobs.forEach(j => {
+    if(j.xp) total.xp += j.xp;
+    if(j.coins) total.coins += j.coins;
+    if(j.stat && (j.val || j.type !== 'award'))
+      total.stats[j.stat] = (total.stats[j.stat] || 0) + (j.val || 1);
+  });
+  const rw = {};
+  if(total.xp) rw.xp = total.xp;
+  if(total.coins) rw.coins = total.coins;
+  if(Object.keys(total.stats).length) rw.stats = total.stats;
+  applyReward(rw); confetti(26);
+  banner('보상이 도착했어요!',
+    jobs.map(j => j.label).slice(0,3).join(', ') + (jobs.length > 3 ? ' 외 ' + (jobs.length-3) + '건' : ''));
+  try{ await schPost({action:'claim', ...schAuth(), items: jobs.map(j => ({type:j.type, row:j.row}))}); }catch(e){}
 }
 
-/* ── 학급 상점(현실 쿠폰) ── */
+/* -- 학급 상점(현실 쿠폰) -- */
 async function openSchoolShop(){
   schInit();
   if(!schLogged()){ openSchoolLogin(); return; }
@@ -5486,16 +5525,16 @@ async function openSchoolShop(){
   }
 }
 
-/* ── 자동 동기화: 게임 시작 시 & 5분마다 승인된 보상 받아오기 ── */
+/* -- 자동 동기화: 게임 시작 시 & 5분마다 승인된 보상 받아오기 -- */
 async function schSilentSync(){
   if(!schLogged() || document.hidden) return;
   try{
-    const d = await schGet({action:'today', ...schAuth()});
-    if(d.ok){ SCH = d; if(d.brand) SB = d.brand; await schPayout(d); }
+    const d = await schGet({action:'sync', ...schAuth()});
+    if(d.ok) await schPayout(d);
   }catch(e){}
 }
 
-/* ── 버튼 등록 ── */
+/* -- 버튼 등록 -- */
 (function schSetup(){
   schInit();
   const wrap = document.getElementById('menubtns');
