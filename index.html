@@ -568,7 +568,8 @@ const GLOVES={
   legend:{n:'전설의 장갑',charm:6,how:'전설 유물',c:'#fff0c0',legend:true},
 };
 const STATN={charm:{n:'매력',e:'💖',c:'#ff8fb8'},wis:{n:'지혜',e:'📖',c:'#8fb8ff'},
-  kind:{n:'친절',e:'🌷',c:'#7ed6a5'},lead:{n:'리더십',e:'👑',c:'#ffc94d'}};
+  kind:{n:'친절',e:'🌷',c:'#7ed6a5'},lead:{n:'리더십',e:'👑',c:'#ffc94d'},
+  grit:{n:'끈기',e:'⚡',c:'#ffa85e'}};
 const LEVEL_XP=[0,100,240,430,680,1000,1400,1900,2500,3200,
   4050,5000,6100,7350,8800,10450,12350,14550,17050,19900,
   23100,26700,30700,35200,40200,45800,52100,59100,66900,75500];
@@ -1143,7 +1144,7 @@ const mmBase=document.createElement('canvas');mmBase.width=MAP_W*3;mmBase.height
 let S=null;
 function freshState(){return{
   v:1, coins:20, xp:0, level:1, sex:'girl',
-  stats:{charm:1,wis:1,kind:1,lead:1},
+  stats:{charm:1,wis:1,kind:1,lead:1,grit:1},
   inv:{carrotSeed:3,strawSeed:1},
   outfit:{dress:'pink',hair:'brown',hairstyle:'long',acc:'crown',shoes:'pink',wings:false,wand:false,gloves:false},
   owned:{dresses:['pink'],hairs:['brown','black'],hairstyles:['long'],accs:['crown'],shoes:['pink'],wings:[],wands:[],gloves:[]},
@@ -1161,6 +1162,7 @@ function freshState(){return{
   stamps:{}, raceQ:0, legendex:{}, legendClaim:{},
   achv:{}, titles:[], title:null, gemEver:false,
   daily:null, attLast:null, attStreak:0, attToday:false,
+  school:{id:null,pin:null,name:'',pts:0,job:'adventurer',jobLv:0,lastSync:null},
 };}
 function pname(){return (S&&S.name)?S.name:'루미';}
 function isBoy(){return !!(S&&S.sex==='boy');}
@@ -5244,6 +5246,265 @@ $('newbtn').addEventListener('pointerdown',()=>{
   toast('🕹️ 화면 왼쪽을 문질러 움직여요!');
   sYes(); bgmWanted=true; startMusic(); saveGame();
 });
+/* ═══════════════════════════════════════════════════════════════
+   학급 통합 시스템 모듈  (class-quest)
+   원본 루미 게임 코드는 건드리지 않고, 이 블록만 추가로 붙입니다.
+   붙이는 위치: </script> 바로 위 (index.html 5247줄 직전)
+   ═══════════════════════════════════════════════════════════════ */
+const SCHOOL_API = 'https://script.google.com/macros/s/AKfycbzSTqaEAbqPC64UeQRh0AhPK4G7zPE0w08pSXHZg-vqpjzvFLSdSKiDSDiP8hN-LzPH1g/exec';
+
+let SB = {app:'우리 반 성장 기록', icon:'🌟', world:'왕국', mission:'임무', gold:'골드', shop:'학급 상점', cls:''};
+let SCH = null;          // 오늘 데이터 캐시
+let schBusy = false;
+
+/* ── 상태 확장 (기존 S에 school 칸만 추가) ── */
+function schInit(){
+  if(!S) return;
+  if(!S.school) S.school = {id:null, pin:null, name:'', pts:0, job:'adventurer', jobLv:0, lastSync:null};
+  if(S.stats && S.stats.grit === undefined) S.stats.grit = 1;   // 5번째 스탯: 끈기
+}
+const schLogged = () => !!(S && S.school && S.school.id);
+
+/* ── 통신 ── */
+async function schGet(params){
+  const url = SCHOOL_API + '?' + new URLSearchParams(params);
+  const r = await fetch(url); return r.json();
+}
+async function schPost(body){
+  const r = await fetch(SCHOOL_API, {method:'POST', body:JSON.stringify(body)});
+  return r.json();
+}
+function schAuth(){ return {id:S.school.id, pin:S.school.pin}; }
+
+/* ── 로그인 ── */
+function openSchoolLogin(){
+  openModal('🏫 우리 반 로그인', `
+    <div class="card small" style="text-align:center;padding:14px">
+      선생님께 받은 <b>학번</b>과 <b>비밀번호 4자리</b>를 넣어 주세요.<br>
+      로그인하면 학교에서 한 일이 ${SB.mission}이 되어 보상을 받아요!
+    </div>
+    <div class="card" style="padding:14px">
+      <div style="margin-bottom:8px">학번</div>
+      <input id="schId" inputmode="numeric" placeholder="예: 4201"
+        style="width:100%;padding:12px;font-size:18px;border:3px solid #6b5a8a;border-radius:12px;font-family:inherit;text-align:center">
+      <div style="margin:12px 0 8px">비밀번호 4자리</div>
+      <input id="schPin" inputmode="numeric" maxlength="4" type="password" placeholder="● ● ● ●"
+        style="width:100%;padding:12px;font-size:18px;border:3px solid #6b5a8a;border-radius:12px;font-family:inherit;text-align:center;letter-spacing:6px">
+      <button id="schGo" class="btn" style="width:100%;margin-top:14px;padding:13px;font-size:17px">로그인 ▶</button>
+      <div id="schMsg" class="small" style="text-align:center;margin-top:8px;min-height:20px"></div>
+    </div>`);
+  const msg = t => { const e = document.getElementById('schMsg'); if(e) e.textContent = t; };
+  document.getElementById('schGo').addEventListener('pointerdown', async () => {
+    const id = document.getElementById('schId').value.trim();
+    const pin = document.getElementById('schPin').value.trim();
+    if(!id || !pin){ msg('학번과 비밀번호를 모두 넣어 주세요'); return; }
+    msg('확인 중…');
+    try{
+      const d = await schGet({action:'login', id, pin});
+      if(!d.ok){ msg('❌ ' + d.error); sNo(); return; }
+      S.school.id = id; S.school.pin = pin; S.school.name = d.name;
+      if(d.brand) SB = d.brand;
+      if(d.sex) S.sex = d.sex;
+      saveGame(); sYes(); confetti(20); closeModal();
+      banner('환영해요, ' + d.name + '님!', SB.cls || SB.app);
+      setTimeout(openSchoolMissions, 700);
+    }catch(e){ msg('인터넷 연결을 확인해 주세요'); }
+  });
+}
+function schLogout(){
+  S.school = {id:null, pin:null, name:'', pts:S.school?S.school.pts:0, job:'adventurer', jobLv:0, lastSync:null};
+  SCH = null; saveGame(); closeModal(); toast('로그아웃했어요');
+}
+
+/* ── 오늘의 임무 화면 ── */
+async function openSchoolMissions(){
+  if(!schLogged()){ openSchoolLogin(); return; }
+  openModal(SB.icon + ' 오늘의 ' + SB.mission, '<div class="card small" style="text-align:center;padding:24px">불러오는 중…</div>');
+  try{
+    const d = await schGet({action:'today', ...schAuth()});
+    if(!d.ok){ document.getElementById('mbody').innerHTML =
+      `<div class="card small" style="text-align:center;padding:20px">❌ ${d.error}
+       <button id="schRe" class="btn" style="margin-top:12px">다시 로그인</button></div>`;
+      document.getElementById('schRe').addEventListener('pointerdown', openSchoolLogin); return; }
+    SCH = d; if(d.brand) SB = d.brand;
+    await schPayout(d);                 // 승인된 보상 먼저 지급
+    renderSchoolMissions(d);
+  }catch(e){
+    document.getElementById('mbody').innerHTML =
+      '<div class="card small" style="text-align:center;padding:20px">인터넷 연결을 확인해 주세요 📡</div>';
+  }
+}
+
+function renderSchoolMissions(d){
+  const S_ = st => ({'없음':'', '자동':'✅ 완료', '대기':'⏳ 선생님 확인 중', '검사대기':'⏳ 검사 기다리는 중',
+                     '승인':'✅ 완료', '검사완료':'✅ 완료', '반려':'다시 해볼까요'})[st] || '';
+  let h = '';
+  if(d.notice) h += `<div class="card" style="padding:12px;background:#fff6df;border-color:#e8c86a">📢 ${d.notice}</div>`;
+  if(d.goal){
+    const pct = Math.min(100, d.goal.current / d.goal.target * 100);
+    h += `<div class="card" style="padding:12px">
+      <div style="font-size:15px">🏰 우리 반 함께 목표 · <b>${d.goal.name}</b></div>
+      <div class="small">${d.goal.current} / ${d.goal.target} · 보상 ${d.goal.reward}</div>
+      <div style="height:14px;background:#eee3ff;border:2px solid #6b5a8a;border-radius:99px;overflow:hidden;margin-top:6px">
+        <div style="height:100%;width:${pct}%;background:linear-gradient(90deg,#ffd93e,#ff8fb8)"></div></div></div>`;
+  }
+  const doneN = d.missions.filter(m => ['자동','승인','검사완료','대기','검사대기'].includes(m.status)).length;
+  h += `<div class="card" style="padding:10px;text-align:center">오늘 ${doneN} / ${d.missions.length} 완료 · ${d.date} (${d.day})</div>`;
+
+  d.missions.forEach(m => {
+    const done = m.status !== '없음' && m.status !== '반려';
+    const wait = m.status === '대기' || m.status === '검사대기';
+    const star = m.grade === '우수' ? ' ⭐우수' : '';
+    h += `<div class="card" style="padding:12px;${done && !wait ? 'opacity:.75' : ''}">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:10px">
+        <div style="flex:1">
+          <div style="font-size:16px">${m.e} ${m.name}${star}</div>
+          <div class="small">${m.desc || ''}</div>
+          <div class="small">⭐${m.xp} · 🪙${m.coins}${m.stat ? ' · ' + (STATN[m.stat] ? STATN[m.stat].e + STATN[m.stat].n : m.stat) : ''}</div>
+        </div>
+        ${done
+          ? `<div class="small" style="white-space:nowrap;text-align:right">${S_(m.status)}</div>`
+          : `<button class="btn schDo" data-m="${m.id}" style="white-space:nowrap">완료!</button>`}
+      </div></div>`;
+  });
+
+  if(d.personal && d.personal.length){
+    h += '<div class="card" style="padding:10px;text-align:center;background:#f0e9ff">🎯 나만의 ' + SB.mission + '</div>';
+    d.personal.forEach(q => {
+      const wait = q.status === '진행';
+      h += `<div class="card" style="padding:12px">
+        <div style="font-size:16px">🎯 ${q.title}</div>
+        <div class="small">${q.desc || ''}${q.due ? ' · 마감 ' + q.due : ''}</div>
+        <div class="small">⭐${q.xp} · 🪙${q.coins}</div>
+        <div class="small" style="margin-top:6px">${wait ? '⏳ 선생님 확인을 기다려요' : '✅ 완료'}</div></div>`;
+    });
+  }
+  h += `<div style="display:flex;gap:8px;margin-top:10px">
+      <button id="schShop" class="btn" style="flex:1">🎫 ${SB.shop}</button>
+      <button id="schRefresh" class="btn" style="flex:1">🔄 새로고침</button>
+    </div>
+    <div class="small" style="text-align:center;margin-top:10px">
+      ${S.school.name} (${S.school.id}) · <a href="#" id="schOut" style="color:#8a7ba0">로그아웃</a></div>`;
+
+  document.getElementById('mbody').innerHTML = h;
+  document.querySelectorAll('.schDo').forEach(b =>
+    b.addEventListener('pointerdown', () => schComplete(b.dataset.m, b)));
+  document.getElementById('schRefresh').addEventListener('pointerdown', openSchoolMissions);
+  document.getElementById('schShop').addEventListener('pointerdown', openSchoolShop);
+  document.getElementById('schOut').addEventListener('click', e => { e.preventDefault(); schLogout(); });
+}
+
+/* ── 미션 완료 신청 ── */
+async function schComplete(mid, btn){
+  if(schBusy) return; schBusy = true;
+  if(btn){ btn.textContent = '…'; btn.disabled = true; }
+  try{
+    const r = await schPost({action:'complete', ...schAuth(), mission:mid});
+    if(!r.ok){ toast('⚠️ ' + r.error); sNo(); }
+    else if(r.status === '자동'){
+      applyReward({xp:r.reward.xp, coins:r.reward.coins});
+      sYes(); confetti(14); toast('🎉 ' + SB.mission + ' 완료!');
+    } else {
+      sYes(); toast('📨 선생님께 보냈어요! 확인되면 보상을 받아요');
+    }
+    openSchoolMissions();
+  }catch(e){ toast('연결에 실패했어요 📡'); }
+  finally{ schBusy = false; }
+}
+
+/* ── 승인된 보상 지급 (중복 방지: 서버에 claim) ── */
+async function schPayout(d){
+  const jobs = [];
+  (d.unclaimed || []).forEach(u => jobs.push({type:'log', row:u.row,
+    xp:u.xp, coins:u.coins, stat:u.stat, label:u.missionName + (u.grade === '우수' ? ' ⭐우수' : '')}));
+  (d.awards || []).forEach(a => jobs.push({type:'award', row:a.row,
+    xp:a.xp, coins:a.coins, stat:a.stat, val:a.val, label:a.reason || a.kind}));
+  (d.personalDone || []).forEach(p => jobs.push({type:'personal', row:p.row,
+    xp:p.xp, coins:p.coins, stat:p.stat, label:p.title}));
+  if(!jobs.length) return;
+  for(const j of jobs){
+    const rw = {};
+    if(j.xp) rw.xp = j.xp;
+    if(j.coins) rw.coins = j.coins;
+    if(j.stat && (j.val || j.type !== 'award')) rw.stats = {[j.stat]: j.val || 1};
+    applyReward(rw);
+    try{ await schPost({action:'claim', ...schAuth(), type:j.type, row:j.row}); }catch(e){}
+  }
+  confetti(26);
+  banner('보상이 도착했어요! 🎁', jobs.map(j => j.label).slice(0,3).join(', ') + (jobs.length > 3 ? ' 외 ' + (jobs.length-3) + '건' : ''));
+}
+
+/* ── 학급 상점(현실 쿠폰) ── */
+async function openSchoolShop(){
+  if(!schLogged()){ openSchoolLogin(); return; }
+  openModal('🎫 ' + SB.shop, '<div class="card small" style="text-align:center;padding:24px">불러오는 중…</div>');
+  try{
+    const d = await schGet({action:'shop', ...schAuth()});
+    if(!d.ok){ document.getElementById('mbody').innerHTML = '<div class="card small" style="padding:20px">❌ ' + d.error + '</div>'; return; }
+    let h = `<div class="card" style="padding:10px;text-align:center">내 ${SB.gold} 🪙 <b>${S.coins}</b></div>`;
+    d.items.forEach(it => {
+      const soldout = it.left <= 0;
+      const over = it.limit && it.mine >= it.limit;
+      const poor = S.coins < it.price;
+      const dis = soldout || over || poor;
+      h += `<div class="card" style="padding:12px;${dis ? 'opacity:.7' : ''}">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:10px">
+          <div style="flex:1">
+            <div style="font-size:16px">${it.e} ${it.name}</div>
+            <div class="small">${it.desc || ''}</div>
+            <div class="small">🪙 ${it.price} · 남은 수량 ${it.left}${it.limit ? ' · 1인 ' + it.limit + '개까지 (내 구매 ' + it.mine + ')' : ''}</div>
+          </div>
+          <button class="btn schBuy" data-i="${it.id}" data-p="${it.price}" data-n="${it.name}" ${dis ? 'disabled' : ''}
+            style="white-space:nowrap">${soldout ? '품절' : over ? '완료' : poor ? '부족' : '구매'}</button>
+        </div></div>`;
+    });
+    if(d.history && d.history.length){
+      h += '<div class="card" style="padding:10px;text-align:center;background:#f0e9ff">내가 산 쿠폰</div>';
+      d.history.slice(-8).reverse().forEach(o =>
+        h += `<div class="card small" style="padding:9px">${o.name} · ${o.date} · ${o.status === '사용' ? '✅ 사용함' : '🎫 사용 전'}</div>`);
+    }
+    h += '<button id="schBack" class="btn" style="width:100%;margin-top:10px">← 오늘의 ' + SB.mission + '</button>';
+    document.getElementById('mbody').innerHTML = h;
+    document.querySelectorAll('.schBuy').forEach(b => b.addEventListener('pointerdown', async () => {
+      if(b.disabled) return;
+      const price = +b.dataset.p;
+      if(S.coins < price){ toast('🪙 ' + SB.gold + '이 부족해요'); sNo(); return; }
+      b.disabled = true; b.textContent = '…';
+      const r = await schPost({action:'buy', ...schAuth(), item:b.dataset.i});
+      if(!r.ok){ toast('⚠️ ' + r.error); sNo(); openSchoolShop(); return; }
+      S.coins -= price; sCoin(); updateHUD(); saveGame();
+      sYes(); confetti(18); banner('쿠폰을 샀어요! 🎫', r.name + ' · 선생님께 보여주세요');
+      openSchoolShop();
+    }));
+    document.getElementById('schBack').addEventListener('pointerdown', openSchoolMissions);
+  }catch(e){
+    document.getElementById('mbody').innerHTML = '<div class="card small" style="padding:20px">인터넷 연결을 확인해 주세요 📡</div>';
+  }
+}
+
+/* ── 자동 동기화: 게임 시작 시 & 5분마다 승인된 보상 받아오기 ── */
+async function schSilentSync(){
+  if(!schLogged() || document.hidden) return;
+  try{
+    const d = await schGet({action:'today', ...schAuth()});
+    if(d.ok){ SCH = d; if(d.brand) SB = d.brand; await schPayout(d); }
+  }catch(e){}
+}
+
+/* ── 버튼 등록 ── */
+(function schSetup(){
+  schInit();
+  const wrap = document.getElementById('menubtns');
+  if(wrap && !document.getElementById('btnSchool')){
+    const b = document.createElement('button');
+    b.className = 'mbtn'; b.id = 'btnSchool'; b.textContent = '🏫';
+    wrap.insertBefore(b, wrap.firstChild);
+    b.addEventListener('pointerdown', () => { audio(); if(uiOpen > 0) return; openSchoolMissions(); });
+  }
+  setInterval(schSilentSync, 5 * 60 * 1000);
+  setTimeout(() => { schInit(); schSilentSync(); }, 3000);
+})();
+
 </script>
 </body>
 </html>
