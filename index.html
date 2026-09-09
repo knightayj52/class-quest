@@ -5246,11 +5246,11 @@ $('newbtn').addEventListener('pointerdown',()=>{
   toast('🕹️ 화면 왼쪽을 문질러 움직여요!');
   sYes(); bgmWanted=true; startMusic(); saveGame();
 });
-/* ═══════════════════════════════════════════════════════════════
+/* ==================================================
    학급 통합 시스템 모듈  (class-quest)
    원본 루미 게임 코드는 건드리지 않고, 이 블록만 추가로 붙입니다.
-   붙이는 위치: </script> 바로 위 (index.html 5247줄 직전)
-   ═══════════════════════════════════════════════════════════════ */
+   붙이는 위치: 스크립트 태그 닫기 직전 (index.html 5247줄 근처)
+   ================================================== */
 const SCHOOL_API = 'https://script.google.com/macros/s/AKfycbzSTqaEAbqPC64UeQRh0AhPK4G7zPE0w08pSXHZg-vqpjzvFLSdSKiDSDiP8hN-LzPH1g/exec';
 
 let SB = {app:'우리 반 성장 기록', icon:'🌟', world:'왕국', mission:'임무', gold:'골드', shop:'학급 상점', cls:''};
@@ -5278,6 +5278,7 @@ function schAuth(){ return {id:S.school.id, pin:S.school.pin}; }
 
 /* ── 로그인 ── */
 function openSchoolLogin(){
+  schInit();
   openModal('🏫 우리 반 로그인', `
     <div class="card small" style="text-align:center;padding:14px">
       선생님께 받은 <b>학번</b>과 <b>비밀번호 4자리</b>를 넣어 주세요.<br>
@@ -5288,9 +5289,9 @@ function openSchoolLogin(){
       <input id="schId" inputmode="numeric" placeholder="예: 4201"
         style="width:100%;padding:12px;font-size:18px;border:3px solid #6b5a8a;border-radius:12px;font-family:inherit;text-align:center">
       <div style="margin:12px 0 8px">비밀번호 4자리</div>
-      <input id="schPin" inputmode="numeric" maxlength="4" type="password" placeholder="● ● ● ●"
+      <input id="schPin" inputmode="numeric" maxlength="4" type="password" placeholder="= = = ="
         style="width:100%;padding:12px;font-size:18px;border:3px solid #6b5a8a;border-radius:12px;font-family:inherit;text-align:center;letter-spacing:6px">
-      <button id="schGo" class="btn" style="width:100%;margin-top:14px;padding:13px;font-size:17px">로그인 ▶</button>
+      <button id="schGo" class="btn" style="width:100%;margin-top:14px;padding:13px;font-size:17px">로그인 =</button>
       <div id="schMsg" class="small" style="text-align:center;margin-top:8px;min-height:20px"></div>
     </div>`);
   const msg = t => { const e = document.getElementById('schMsg'); if(e) e.textContent = t; };
@@ -5302,6 +5303,7 @@ function openSchoolLogin(){
     try{
       const d = await schGet({action:'login', id, pin});
       if(!d.ok){ msg('❌ ' + d.error); sNo(); return; }
+      schInit();
       S.school.id = id; S.school.pin = pin; S.school.name = d.name;
       if(d.brand) SB = d.brand;
       if(d.sex) S.sex = d.sex;
@@ -5318,6 +5320,7 @@ function schLogout(){
 
 /* ── 오늘의 임무 화면 ── */
 async function openSchoolMissions(){
+  schInit();
   if(!schLogged()){ openSchoolLogin(); return; }
   openModal(SB.icon + ' 오늘의 ' + SB.mission, '<div class="card small" style="text-align:center;padding:24px">불러오는 중…</div>');
   try{
@@ -5436,6 +5439,7 @@ async function schPayout(d){
 
 /* ── 학급 상점(현실 쿠폰) ── */
 async function openSchoolShop(){
+  schInit();
   if(!schLogged()){ openSchoolLogin(); return; }
   openModal('🎫 ' + SB.shop, '<div class="card small" style="text-align:center;padding:24px">불러오는 중…</div>');
   try{
@@ -5499,9 +5503,11 @@ async function schSilentSync(){
     const b = document.createElement('button');
     b.className = 'mbtn'; b.id = 'btnSchool'; b.textContent = '🏫';
     wrap.insertBefore(b, wrap.firstChild);
-    b.addEventListener('pointerdown', () => { audio(); if(uiOpen > 0) return; openSchoolMissions(); });
+    b.addEventListener('pointerdown', () => { audio(); if(uiOpen > 0) return; schInit(); openSchoolMissions(); });
   }
   setInterval(schSilentSync, 5 * 60 * 1000);
+  let tries=0;
+  const warm=setInterval(()=>{ schInit(); if(S||++tries>20) clearInterval(warm); }, 500);
   setTimeout(() => { schInit(); schSilentSync(); }, 3000);
 })();
 
