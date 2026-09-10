@@ -1162,7 +1162,7 @@ function freshState(){return{
   stamps:{}, raceQ:0, legendex:{}, legendClaim:{},
   achv:{}, titles:[], title:null, gemEver:false,
   daily:null, attLast:null, attStreak:0, attToday:false,
-  school:{id:null,pin:null,name:'',pts:0,job:'adventurer',jobLv:0,lastSync:null},
+  school:{id:null,pin:null,name:'',pts:0,ptsLv:1,job:'adventurer',jobLv:0,side:[],lastSync:null},
 };}
 function pname(){return (S&&S.name)?S.name:'루미';}
 function isBoy(){return !!(S&&S.sex==='boy');}
@@ -5548,6 +5548,626 @@ async function schSilentSync(){
   let tries=0;
   const warm=setInterval(()=>{ schInit(); if(S||++tries>20) clearInterval(warm); }, 500);
   setTimeout(() => { schInit(); schSilentSync(); }, 3000);
+})();
+
+/* ==================================================================
+   성장 시스템 모듈 (class-quest)
+   스탯 포인트 배분 / 직업 전직 / 직업 효과 / 성장 화면(대형 캐릭터)
+   원본 함수는 수정하지 않고 감싸서(wrapping) 확장합니다.
+   ================================================================== */
+
+/* -- 직업 정의 (23종) --
+   tier 0 시작 / 1 1차(Lv10, 주스탯 15) / 2 2차(Lv20, 주 28 + 부 12)
+   3 전설(Lv30, 균형) / 'side' 부업(Lv15 + 칭호)
+   fx: speed·coin·sell·petxp·renown (배율), fish·cook (가산), grow·forage (배율, 작을수록 좋음) */
+const JOBS = {
+  adventurer:{n:'모험가', e:'🎒', tier:0, desc:'모든 이야기의 시작. 어떤 길이든 갈 수 있어요.', fx:{}},
+  /* 1차 */
+  knight:  {n:'기사',   e:'⚔️', tier:1, main:'lead',  desc:'앞장서서 친구들을 이끄는 용감한 기사',   fx:{speed:1.08, petxp:1.15}},
+  mage:    {n:'마법사', e:'🔮', tier:1, main:'wis',   desc:'지혜로 세상의 비밀을 푸는 마법사',       fx:{cook:30, fish:0.02}},
+  healer:  {n:'치유사', e:'💚', tier:1, main:'kind',  desc:'따뜻한 마음으로 모두를 돌보는 치유사',   fx:{renown:1.15, petxp:1.10}},
+  explorer:{n:'탐험가', e:'🧭', tier:1, main:'charm', desc:'호기심 가득, 새로운 곳을 찾아가는 탐험가', fx:{sell:1.10, forage:0.85}},
+  guardian:{n:'수호자', e:'🛡️', tier:1, main:'grit',  desc:'꾸준함으로 왕국을 지키는 든든한 수호자', fx:{grow:0.85, coin:1.05}},
+  /* 2차 */
+  paladin:    {n:'성기사',     e:'✨', tier:2, parent:'knight',   sub:'kind',  desc:'빛으로 친구를 지키는 기사',    fx:{renown:1.10, petxp:1.10}},
+  dragonknight:{n:'용기사',    e:'🐉', tier:2, parent:'knight',   sub:'grit',  desc:'용의 힘을 다루는 강인한 기사', fx:{coin:1.10}},
+  archmage:   {n:'대마법사',   e:'🌌', tier:2, parent:'mage',     sub:'charm', desc:'별의 마법을 부리는 대마법사',  fx:{fish:0.03, cook:20}},
+  sage:       {n:'현자',       e:'📜', tier:2, parent:'mage',     sub:'kind',  desc:'모두가 조언을 구하는 현명한 현자', fx:{sell:1.15}},
+  priest:     {n:'사제',       e:'🕊️', tier:2, parent:'healer',   sub:'wis',   desc:'동물과 마음을 나누는 사제',    fx:{petxp:1.20}},
+  bard:       {n:'음유시인',   e:'🎵', tier:2, parent:'healer',   sub:'charm', desc:'노래로 왕국을 즐겁게 하는 음유시인', fx:{coin:1.08}},
+  navigator:  {n:'항해사',     e:'⛵', tier:2, parent:'explorer', sub:'lead',  desc:'바다 너머를 개척하는 항해사',  fx:{sell:1.10, forage:0.90}},
+  treasure:   {n:'보물사냥꾼', e:'💎', tier:2, parent:'explorer', sub:'grit',  desc:'숨겨진 보물을 찾아내는 사냥꾼', fx:{coin:1.12}},
+  general:    {n:'장군',       e:'🏰', tier:2, parent:'guardian', sub:'lead',  desc:'왕국의 방패, 모두가 믿는 장군', fx:{speed:1.12}},
+  blacksmith: {n:'대장장이',   e:'🔨', tier:2, parent:'guardian', sub:'wis',   desc:'끈기로 명품을 만드는 대장장이', fx:{sell:1.20, coin:1.05}},
+  /* 3차 전설 */
+  starlord:   {n:'별의 군주',   e:'⭐', tier:3, balance:['lead','wis','grit'],  min:22, desc:'별빛을 다스리는 전설의 군주', fx:{coin:1.20}},
+  forestspirit:{n:'숲의 정령',  e:'🌿', tier:3, balance:['kind','charm','wis'], min:22, desc:'숲의 모든 생명이 따르는 정령', fx:{petxp:1.30, renown:1.20}},
+  hero:       {n:'왕국의 영웅', e:'🏆', tier:3, balance:['lead','wis','kind','charm','grit'], min:15, desc:'모든 것을 고루 갖춘 진정한 영웅', fx:{coin:1.10, sell:1.10, speed:1.10, petxp:1.10, renown:1.10}},
+  /* 부업(히든) */
+  fisher:  {n:'어부',        e:'🎣', tier:'side', title:'angler',  desc:'낚시왕만 될 수 있는 전설의 어부',  fx:{fish:0.05}},
+  tamer:   {n:'조련사',      e:'🐾', tier:'side', title:'petking', desc:'동물의 왕이 인정한 조련사',        fx:{petxp:1.25}},
+  royalchef:{n:'왕실 요리사', e:'🍳', tier:'side', title:'chef',    desc:'요리 명장의 실력을 인정받았어요',  fx:{cook:40}},
+  jeweler: {n:'보석 세공사', e:'💠', tier:'side', title:'miner',   desc:'보석 광부에서 세공사로',           fx:{sell:1.15}},
+  envoy:   {n:'외교관',      e:'🤝', tier:'side', title:'diplomat',desc:'모든 종족의 벗, 왕국의 외교관',   fx:{renown:1.30}},
+};
+/* -- 직업 장비 오버레이 --
+   drawPrincess 좌표계 기준 (발=0, 머리 중심 -70, 어깨 -56, 허리 -38, 손 ±10.3/-36.3)
+   각 직업마다 back(몸 뒤) / front(몸 앞) 두 레이어 */
+
+/* 직업 하의 오버레이 — 기존 치마/튜닉을 직업 색으로 덮음 */
+function jobSkirt(g, c1, c2, opt){
+  opt = opt || {};
+  g.save(); g.translate(0,-38);
+  const gr = g.createLinearGradient(0,0,0,30);
+  gr.addColorStop(0,c1); gr.addColorStop(1,c2||c1);
+  g.fillStyle = gr;
+  g.beginPath(); g.moveTo(-5.2,0);
+  g.bezierCurveTo(-9.6,10,-15.2,20,-16.2,28);
+  g.quadraticCurveTo(-8,31.2,0,31.2);
+  g.quadraticCurveTo(8,31.2,16.2,28);
+  g.bezierCurveTo(15.2,20,9.6,10,5.2,0);
+  g.closePath(); g.fill();
+  if(opt.trim){ g.fillStyle=opt.trim; g.beginPath();
+    g.moveTo(-16.2,28); g.quadraticCurveTo(0,31.6,16.2,28);
+    g.quadraticCurveTo(0,34.4,-16.2,28); g.closePath(); g.fill(); }
+  if(opt.belt){ g.fillStyle=opt.belt; g.fillRect(-6.4,-1.2,12.8,3.2);
+    g.fillStyle='#e8c14e'; g.fillRect(-1.6,-1.2,3.2,3.2); }
+  if(opt.panel){ g.fillStyle=opt.panel; g.beginPath();
+    g.moveTo(-3.4,2); g.lineTo(3.4,2); g.lineTo(4.6,27); g.lineTo(-4.6,27); g.closePath(); g.fill(); }
+  g.restore();
+}
+
+const JOBGEAR = {
+  knight:{ // 기사: 투구·어깨갑옷·검·방패
+    lower(g,t){ jobSkirt(g,'#8fa8cf','#5b7ba8',{trim:'#c9d4e4',belt:'#7a5a3a'}); },
+    back(g,t){ // 등 뒤 망토
+      g.fillStyle='#4f7fd4'; g.beginPath();
+      g.moveTo(-8,-56); g.quadraticCurveTo(-13,-40,-11,-22);
+      g.quadraticCurveTo(0,-19,11,-22); g.quadraticCurveTo(13,-40,8,-56);
+      g.closePath(); g.fill();
+      g.fillStyle='rgba(255,255,255,.18)'; g.beginPath();
+      g.moveTo(-4,-56); g.quadraticCurveTo(-6,-40,-5,-23); g.lineTo(0,-22); g.lineTo(0,-56);
+      g.closePath(); g.fill();
+    },
+    front(g,t){
+      // 어깨 갑옷
+      g.fillStyle='#c9d4e4'; g.strokeStyle='#8d9cb4'; g.lineWidth=0.8;
+      for(const sg of [-1,1]){ g.beginPath(); g.ellipse(sg*9.4,-53.4,4.6,3.4,sg*0.3,0,7); g.fill(); g.stroke(); }
+      // 가슴 갑옷
+      g.fillStyle='#dfe6f2'; g.beginPath();
+      g.moveTo(-5.6,-54); g.lineTo(5.6,-54); g.lineTo(4.4,-42); g.lineTo(0,-39); g.lineTo(-4.4,-42);
+      g.closePath(); g.fill(); g.strokeStyle='#9aa8bf'; g.stroke();
+      g.fillStyle='#ffd45e'; g.beginPath(); g.arc(0,-48,1.9,0,7); g.fill();
+      // 방패 (왼손)
+      g.save(); g.translate(-11,-38); g.rotate(-0.18);
+      g.fillStyle='#5b8ada'; g.beginPath();
+      g.moveTo(-4,-5); g.lineTo(4,-5); g.lineTo(4,3); g.quadraticCurveTo(0,7.5,-4,3); g.closePath(); g.fill();
+      g.strokeStyle='#e8c14e'; g.lineWidth=1.1; g.stroke();
+      g.fillStyle='#fff'; g.beginPath(); g.arc(0,-1,1.5,0,7); g.fill(); g.restore();
+      // 검 (오른손)
+      g.save(); g.translate(10.6,-37); g.rotate(0.22);
+      g.strokeStyle='#e9edf5'; g.lineWidth=2.1; g.lineCap='round';
+      g.beginPath(); g.moveTo(0,-2); g.lineTo(0,-20); g.stroke();
+      g.strokeStyle='#b9c4d6'; g.lineWidth=0.7; g.beginPath(); g.moveTo(0,-4); g.lineTo(0,-19); g.stroke();
+      g.fillStyle='#8a6a3a'; g.fillRect(-2.6,-3.4,5.2,1.6);
+      g.fillStyle='#6a4a26'; g.fillRect(-0.9,-2,1.8,3); g.restore();
+      // 투구
+      g.fillStyle='#dfe6f2'; g.beginPath(); g.arc(0,-72,9.6,Math.PI*1.0,Math.PI*2.0); g.fill();
+      g.strokeStyle='#9aa8bf'; g.lineWidth=0.9; g.stroke();
+      g.fillStyle='#c9d4e4'; g.fillRect(-9.6,-73,19.2,2.4);
+      g.fillStyle='#e2453f'; // 깃털 장식
+      g.beginPath(); g.moveTo(-1.4,-80.5); g.quadraticCurveTo(0,-89+Math.sin(t*3)*0.8,3.4,-86); g.quadraticCurveTo(1.6,-82,1.4,-80.5); g.closePath(); g.fill();
+    }
+  },
+  mage:{ // 마법사: 로브·별 지팡이·고깔모자
+    lower(g,t){ jobSkirt(g,'#8f74e0','#5f43a8',{trim:'#ffd45e',panel:'#7b5fd0'}); },
+    back(g,t){
+      g.fillStyle='#7b5fd0'; g.beginPath();
+      g.moveTo(-9,-56); g.quadraticCurveTo(-16,-34,-14,-14);
+      g.quadraticCurveTo(0,-10,14,-14); g.quadraticCurveTo(16,-34,9,-56);
+      g.closePath(); g.fill();
+      g.fillStyle='rgba(255,255,255,.14)';
+      for(const p of [[-8,-40],[7,-30],[-5,-20],[10,-44]]){ g.beginPath(); g.arc(p[0],p[1],1.4,0,7); g.fill(); }
+    },
+    front(g,t){
+      // 로브 앞자락
+      g.fillStyle='#8f74e0'; g.beginPath();
+      g.moveTo(-5.4,-54); g.quadraticCurveTo(-8,-46,-7.6,-38); g.lineTo(7.6,-38);
+      g.quadraticCurveTo(8,-46,5.4,-54); g.closePath(); g.fill();
+      g.fillStyle='#ffd45e'; g.font=efont(5); g.textAlign='center'; g.fillText('★',0,-45);
+      // 지팡이
+      g.save(); g.translate(10.6,-37); g.rotate(0.12);
+      g.strokeStyle='#8a6a3a'; g.lineWidth=1.7; g.lineCap='round';
+      g.beginPath(); g.moveTo(0,2); g.lineTo(-1,-20); g.stroke();
+      const gl=0.6+Math.sin(t*4)*0.4;
+      g.fillStyle='rgba(255,220,110,'+(gl*0.5)+')'; g.beginPath(); g.arc(-1,-22,5.2,0,7); g.fill();
+      g.fillStyle='#ffd45e'; g.font=efont(8); g.textAlign='center'; g.fillText('✦',-1,-19.4);
+      g.restore();
+      // 고깔모자
+      g.fillStyle='#6b4fc0'; g.beginPath(); g.ellipse(0,-77.5,11.4,3,0,0,7); g.fill();
+      g.fillStyle='#7b5fd0'; g.beginPath();
+      g.moveTo(-8.6,-77.5); g.quadraticCurveTo(-3,-92,1.6+Math.sin(t*1.5)*0.9,-97);
+      g.quadraticCurveTo(2.6,-84,8.6,-77.5); g.closePath(); g.fill();
+      g.fillStyle='#ffd45e'; g.font=efont(5); g.fillText('✦',-1,-85);
+    }
+  },
+  healer:{ // 치유사: 흰 로브·화관·잎 펜던트
+    lower(g,t){ jobSkirt(g,'#f6fffa','#d8f0e2',{trim:'#7ed6a5',belt:'#7ed6a5'}); },
+    back(g,t){
+      g.fillStyle='#f4fff8'; g.beginPath();
+      g.moveTo(-8,-56); g.quadraticCurveTo(-13,-36,-11,-18);
+      g.quadraticCurveTo(0,-15,11,-18); g.quadraticCurveTo(13,-36,8,-56);
+      g.closePath(); g.fill();
+      g.strokeStyle='#a8e6c0'; g.lineWidth=0.9; g.stroke();
+    },
+    front(g,t){
+      g.fillStyle='#eafff2'; g.beginPath();
+      g.moveTo(-5.2,-54); g.quadraticCurveTo(-7,-46,-6.8,-38); g.lineTo(6.8,-38);
+      g.quadraticCurveTo(7,-46,5.2,-54); g.closePath(); g.fill();
+      g.fillStyle='#7ed6a5'; g.fillRect(-6.4,-45,12.8,2); // 초록 띠
+      // 잎 펜던트
+      g.fillStyle='#5fc98d'; g.beginPath(); g.ellipse(0,-50,1.7,2.9,0.5,0,7); g.fill();
+      // 지팡이 대신 치유 오라
+      const a=0.25+Math.sin(t*2.5)*0.15;
+      g.strokeStyle='rgba(126,214,165,'+a+')'; g.lineWidth=1.4;
+      g.beginPath(); g.arc(0,-45,17,0,7); g.stroke();
+      g.fillStyle='#7ed6a5'; g.font=efont(6); g.textAlign='center';
+      g.globalAlpha=0.5+Math.sin(t*3)*0.3; g.fillText('✚',13,-58); g.fillText('✚',-13,-46); g.globalAlpha=1;
+      // 꽃 화관
+      const cols=['#ff9ecb','#ffd76e','#9be8c9','#ffb3c6','#c9a6ff'];
+      for(let i=0;i<5;i++){ const ang=Math.PI*(1.08+i*0.21);
+        g.fillStyle=cols[i]; g.beginPath(); g.arc(Math.cos(ang)*9.6, -71+Math.sin(ang)*9.2, 2.1,0,7); g.fill();
+        g.fillStyle='#fff'; g.beginPath(); g.arc(Math.cos(ang)*9.6, -71+Math.sin(ang)*9.2, 0.8,0,7); g.fill(); }
+    }
+  },
+  explorer:{ // 탐험가: 배낭·조끼·모자·망원경
+    lower(g,t){ jobSkirt(g,'#b8a878','#8a7d4f',{trim:'#6f5828',belt:'#7d5828'}); },
+    back(g,t){
+      g.fillStyle='#a9793f'; g.beginPath(); g.roundRect(-8.6,-54,17.2,20,3.4); g.fill();
+      g.strokeStyle='#7d5828'; g.lineWidth=0.9; g.stroke();
+      g.fillStyle='#8a6330'; g.fillRect(-8.6,-45,17.2,2.6);
+      g.fillStyle='#d9b06a'; g.beginPath(); g.roundRect(-4.6,-52,9.2,6,1.8); g.fill();
+    },
+    front(g,t){
+      // 카키 조끼
+      g.fillStyle='#8a9a5b'; g.beginPath();
+      g.moveTo(-5.4,-54); g.lineTo(-7,-39); g.lineTo(-3,-39); g.lineTo(-2.6,-53); g.closePath(); g.fill();
+      g.beginPath(); g.moveTo(5.4,-54); g.lineTo(7,-39); g.lineTo(3,-39); g.lineTo(2.6,-53); g.closePath(); g.fill();
+      g.fillStyle='#6f7d45'; g.fillRect(-6.4,-47,3.2,3.2); g.fillRect(3.2,-47,3.2,3.2); // 주머니
+      // 어깨끈
+      g.strokeStyle='#7d5828'; g.lineWidth=1.5;
+      g.beginPath(); g.moveTo(-5.4,-55); g.lineTo(-3.6,-42); g.stroke();
+      g.beginPath(); g.moveTo(5.4,-55); g.lineTo(3.6,-42); g.stroke();
+      // 망원경 (목걸이)
+      g.strokeStyle='#5b4a32'; g.lineWidth=0.9; g.beginPath(); g.arc(0,-56,4.6,0.2,Math.PI-0.2); g.stroke();
+      g.fillStyle='#3f3a33'; g.beginPath(); g.roundRect(-2.4,-49.6,4.8,2.6,1); g.fill();
+      g.fillStyle='#8fd3ff'; g.beginPath(); g.arc(2.2,-48.3,0.9,0,7); g.fill();
+      // 탐험 모자
+      g.fillStyle='#a9793f'; g.beginPath(); g.ellipse(0,-76.5,12.4,3.4,0,0,7); g.fill();
+      g.beginPath(); g.ellipse(0,-79.5,7.6,4.6,0,Math.PI,0); g.fill();
+      g.fillStyle='#6f4f22'; g.fillRect(-7.6,-78.4,15.2,2);
+    }
+  },
+  guardian:{ // 수호자: 나뭇잎 어깨갑옷·둥근 방패·초록 튜닉
+    lower(g,t){ jobSkirt(g,'#6fa04d','#436b2c',{trim:'#a8d47a',belt:'#7a5a3a'}); },
+    back(g,t){
+      g.fillStyle='#7d5a34'; g.beginPath(); g.arc(0,-46,9.6,0,7); g.fill();
+      g.fillStyle='#a87a48'; g.beginPath(); g.arc(0,-46,7.2,0,7); g.fill();
+      g.strokeStyle='#5f4322'; g.lineWidth=1; g.beginPath(); g.arc(0,-46,9.6,0,7); g.stroke();
+      g.fillStyle='#6b8f3c'; g.beginPath(); g.arc(0,-46,2.6,0,7); g.fill();
+    },
+    front(g,t){
+      // 초록 튜닉
+      g.fillStyle='#5f8f45'; g.beginPath();
+      g.moveTo(-5.6,-54); g.quadraticCurveTo(-7.6,-46,-7.2,-38); g.lineTo(7.2,-38);
+      g.quadraticCurveTo(7.6,-46,5.6,-54); g.closePath(); g.fill();
+      // 나뭇잎 어깨
+      g.fillStyle='#7fae55';
+      for(const sg of [-1,1]){ g.save(); g.translate(sg*9.2,-53.4); g.rotate(sg*0.5);
+        g.beginPath(); g.ellipse(0,0,5,3.2,0,0,7); g.fill();
+        g.strokeStyle='#4f7a34'; g.lineWidth=0.7; g.beginPath(); g.moveTo(-4,0); g.lineTo(4,0); g.stroke(); g.restore(); }
+      // 벨트
+      g.fillStyle='#7a5a3a'; g.fillRect(-7,-40.4,14,2.8);
+      g.fillStyle='#e8c14e'; g.fillRect(-1.6,-40.4,3.2,2.8);
+      // 새싹 투구장식
+      g.fillStyle='#7fae55'; g.beginPath();
+      g.ellipse(2.6,-81+Math.sin(t*2)*0.5,2.6,1.6,-0.6,0,7); g.fill();
+      g.beginPath(); g.ellipse(-2.6,-80.4,2.4,1.5,0.6,0,7); g.fill();
+      g.strokeStyle='#4f7a34'; g.lineWidth=0.9; g.beginPath(); g.moveTo(0,-77); g.lineTo(0,-81); g.stroke();
+    }
+  },
+  starlord:{ lower(g,t){ jobSkirt(g,'#3a3f7a','#1e2148',{trim:'#ffd45e'}); },
+    front(g,t){ g.fillStyle='#ffd45e'; g.font=efont(6); g.textAlign='center';
+      for(let i=0;i<5;i++){ const a=t*1.1+i*1.26; g.globalAlpha=.5+Math.sin(t*3+i)*.4;
+        g.fillText('★', Math.cos(a)*19, -62+Math.sin(a)*10); } g.globalAlpha=1;
+      g.fillStyle='#2b2f5e'; g.beginPath();
+      g.moveTo(-5.6,-54); g.quadraticCurveTo(-7.8,-46,-7.4,-38); g.lineTo(7.4,-38);
+      g.quadraticCurveTo(7.8,-46,5.6,-54); g.closePath(); g.fill();
+      g.fillStyle='#ffd45e'; g.font=efont(5); g.fillText('★',0,-45);
+      g.fillStyle='#ffd45e'; g.beginPath();
+      g.moveTo(-7,-79); g.lineTo(-4,-86); g.lineTo(0,-80); g.lineTo(4,-86); g.lineTo(7,-79); g.closePath(); g.fill(); },
+    back(g,t){ g.globalAlpha=.3+Math.sin(t*2)*.15;
+      const gr=g.createRadialGradient(0,-52,2,0,-52,26); gr.addColorStop(0,'#ffe9a8'); gr.addColorStop(1,'rgba(255,233,168,0)');
+      g.fillStyle=gr; g.beginPath(); g.arc(0,-52,26,0,7); g.fill(); g.globalAlpha=1; } },
+  forestspirit:{ lower(g,t){ jobSkirt(g,'#8fc96a','#4f7a34',{trim:'#d4f0a8'}); },
+    front(g,t){ g.fillStyle='#5f8f45'; g.beginPath();
+      g.moveTo(-5.6,-54); g.quadraticCurveTo(-7.8,-46,-7.4,-38); g.lineTo(7.4,-38);
+      g.quadraticCurveTo(7.8,-46,5.6,-54); g.closePath(); g.fill();
+      const cols=['#ff9ecb','#ffd76e','#9be8c9','#ffb3c6','#c9a6ff'];
+      for(let i=0;i<5;i++){ const ang=Math.PI*(1.08+i*0.21);
+        g.fillStyle=cols[i]; g.beginPath(); g.arc(Math.cos(ang)*9.8,-71.5+Math.sin(ang)*9.4,2.2,0,7); g.fill(); }
+      g.fillStyle='#7fae55'; g.beginPath(); g.ellipse(3,-82+Math.sin(t*2)*0.6,3,1.8,-0.6,0,7); g.fill(); },
+    back(g,t){ g.fillStyle='#7fae55'; g.globalAlpha=.75;
+      for(let i=0;i<6;i++){ const a=t*0.8+i*1.05; g.beginPath();
+        g.ellipse(Math.cos(a)*17,-48+Math.sin(a*1.3)*13,2.6,1.6,a,0,7); g.fill(); } g.globalAlpha=1; } },
+  hero:{ lower(g,t){ jobSkirt(g,'#fff0c4','#ffd45e',{trim:'#fff'}); },
+    front(g,t){ g.fillStyle='#fff6e0'; g.beginPath();
+      g.moveTo(-5.6,-54); g.quadraticCurveTo(-7.8,-46,-7.4,-38); g.lineTo(7.4,-38);
+      g.quadraticCurveTo(7.8,-46,5.6,-54); g.closePath(); g.fill();
+      g.strokeStyle='#e8c14e'; g.lineWidth=0.9; g.stroke();
+      g.fillStyle='#c9d4e4'; g.strokeStyle='#8d9cb4'; g.lineWidth=0.8;
+      for(const sg of [-1,1]){ g.beginPath(); g.ellipse(sg*9.4,-53.4,4.8,3.6,sg*0.3,0,7); g.fill(); g.stroke(); }
+      g.fillStyle='#ffd45e'; g.font=efont(9); g.textAlign='center';
+      g.globalAlpha=.85+Math.sin(t*3)*.15; g.fillText('👑',0,-82); g.globalAlpha=1; },
+    back(g,t){ g.globalAlpha=.35+Math.sin(t*1.8)*.2;
+      const gr=g.createRadialGradient(0,-50,3,0,-50,30);
+      gr.addColorStop(0,'#fff3c4'); gr.addColorStop(.5,'rgba(255,180,220,.5)'); gr.addColorStop(1,'rgba(255,255,255,0)');
+      g.fillStyle=gr; g.beginPath(); g.arc(0,-50,30,0,7); g.fill(); g.globalAlpha=1; } },
+};
+/* 2차·전설 직업은 부모 장비 + 추가 이펙트 */
+const JOBGEAR_EXTRA = {
+  paladin:{ front(g,t){ g.globalAlpha=.45+Math.sin(t*2.4)*.25; g.fillStyle='#ffe9a8';
+    g.beginPath(); g.arc(0,-70,13.6,0,7); g.fill(); g.globalAlpha=1;
+    g.fillStyle='#ffd45e'; g.font=efont(6); g.textAlign='center'; g.fillText('✧',-13,-62); g.fillText('✧',13,-56); } },
+  dragonknight:{ back(g,t){ const f=1+Math.sin(t*5)*0.14; g.fillStyle='#9a4f4f';
+    for(const sg of [-1,1]){ g.save(); g.translate(sg*10,-52); g.scale(sg*1,f);
+      g.beginPath(); g.moveTo(0,0); g.quadraticCurveTo(9,-6,13,4); g.quadraticCurveTo(7,2,0,8); g.closePath(); g.fill(); g.restore(); } } },
+  archmage:{ front(g,t){ g.fillStyle='#c9a6ff'; g.font=efont(6); g.textAlign='center';
+    for(let i=0;i<3;i++){ const a=t*1.4+i*2.1; g.globalAlpha=.5+Math.sin(t*3+i)*.3;
+      g.fillText('✦', Math.cos(a)*15, -66+Math.sin(a)*7); } g.globalAlpha=1; } },
+  sage:{ front(g,t){ g.fillStyle='#f0e6cd'; g.save(); g.translate(-11,-38); g.rotate(-0.2);
+    g.beginPath(); g.roundRect(-3,-6,6,8,1); g.fill(); g.strokeStyle='#b9a67e'; g.lineWidth=0.7; g.stroke();
+    g.strokeStyle='#c9b58f'; g.beginPath(); g.moveTo(-2,-4); g.lineTo(2,-4); g.moveTo(-2,-2); g.lineTo(2,-2); g.stroke(); g.restore(); } },
+  priest:{ front(g,t){ g.fillStyle='#fff'; g.font=efont(7); g.textAlign='center';
+    g.globalAlpha=.6+Math.sin(t*2.6)*.3; g.fillText('🕊', 0, -88); g.globalAlpha=1; } },
+  bard:{ front(g,t){ g.save(); g.translate(-11.5,-40); g.rotate(-0.3);
+    g.fillStyle='#c08a4a'; g.beginPath(); g.ellipse(0,0,3.6,5,0,0,7); g.fill();
+    g.strokeStyle='#8a6030'; g.lineWidth=1.2; g.beginPath(); g.moveTo(0,-5); g.lineTo(0,-12); g.stroke();
+    g.strokeStyle='#f0e0b0'; g.lineWidth=0.4;
+    for(let i=-1;i<=1;i++){ g.beginPath(); g.moveTo(i*1.2,-11); g.lineTo(i*1.2,2); g.stroke(); } g.restore();
+    g.fillStyle='#ffb3c6'; g.font=efont(5.5); g.globalAlpha=.7+Math.sin(t*3)*.3; g.fillText('♪',-16,-52); g.fillText('♫',15,-60); g.globalAlpha=1; } },
+  navigator:{ front(g,t){ g.fillStyle='#2c3e6b'; g.beginPath(); g.ellipse(0,-77.5,11,3,0,0,7); g.fill();
+    g.beginPath(); g.moveTo(-8,-77.5); g.quadraticCurveTo(0,-88,8,-77.5); g.closePath(); g.fill();
+    g.fillStyle='#e8c14e'; g.font=efont(5); g.textAlign='center'; g.fillText('⚓',0,-80); } },
+  treasure:{ front(g,t){ g.fillStyle='#e8c14e'; g.font=efont(6); g.textAlign='center';
+    g.globalAlpha=.6+Math.sin(t*4)*.4; g.fillText('💎',-14,-44); g.globalAlpha=1;
+    g.fillStyle='#a9793f'; g.beginPath(); g.roundRect(6,-34,7,5,1.4); g.fill();
+    g.fillStyle='#e8c14e'; g.fillRect(6,-32,7,1.2); } },
+  general:{ front(g,t){ g.fillStyle='#c9a227'; // 견장
+    for(const sg of [-1,1]){ g.beginPath(); g.roundRect(sg*11-2.4,-56,4.8,3,1); g.fill(); }
+    g.fillStyle='#e2453f'; g.beginPath(); g.moveTo(-3,-86); g.quadraticCurveTo(0,-96+Math.sin(t*2.5)*1.2,4,-92);
+    g.quadraticCurveTo(1,-88,3,-86); g.closePath(); g.fill(); } },
+  blacksmith:{ front(g,t){ g.save(); g.translate(10.6,-37); g.rotate(0.3);
+    g.strokeStyle='#7a5a3a'; g.lineWidth=1.8; g.beginPath(); g.moveTo(0,0); g.lineTo(0,-11); g.stroke();
+    g.fillStyle='#8d9cb4'; g.beginPath(); g.roundRect(-3.4,-15.5,6.8,4.6,1.2); g.fill(); g.restore();
+    if(Math.sin(t*6)>0.5){ g.fillStyle='#ffb03e'; g.font=efont(5); g.textAlign='center'; g.fillText('✦',13,-50); } } },
+forestspirit:{ back(g,t){ g.fillStyle='#7fae55'; g.globalAlpha=.75;
+    for(let i=0;i<6;i++){ const a=t*0.8+i*1.05; g.beginPath();
+      g.ellipse(Math.cos(a)*17, -48+Math.sin(a*1.3)*13, 2.6,1.6, a, 0,7); g.fill(); } g.globalAlpha=1; } },
+};
+/* 부업 소품 */
+const SIDEGEAR = {
+  fisher:{ front(g,t){ g.save(); g.translate(10.6,-37); g.rotate(0.5);
+    g.strokeStyle='#8a6a3a'; g.lineWidth=1.2; g.beginPath(); g.moveTo(0,0); g.lineTo(2,-16); g.stroke();
+    g.strokeStyle='rgba(255,255,255,.7)'; g.lineWidth=0.4; g.beginPath(); g.moveTo(2,-16); g.lineTo(7,-6); g.stroke();
+    g.fillStyle='#8fd3ff'; g.font=efont(4.6); g.fillText('🐟',7,-4); g.restore(); } },
+  tamer:{ front(g,t){ g.fillStyle='#ffb3c6'; g.font=efont(5); g.textAlign='center';
+    g.globalAlpha=.7+Math.sin(t*3)*.3; g.fillText('🐾',-15,-30); g.globalAlpha=1; } },
+  royalchef:{ front(g,t){ g.fillStyle='#fff'; g.beginPath(); g.roundRect(-7,-84,14,7,2.6); g.fill();
+    g.beginPath(); g.arc(-3.4,-84,3.4,0,7); g.fill(); g.beginPath(); g.arc(0,-86,3.8,0,7); g.fill();
+    g.beginPath(); g.arc(3.4,-84,3.4,0,7); g.fill();
+    g.strokeStyle='#e0e0e0'; g.lineWidth=0.7; g.beginPath(); g.moveTo(-7,-78); g.lineTo(7,-78); g.stroke(); } },
+  jeweler:{ front(g,t){ g.fillStyle='#8fd3ff'; g.font=efont(4.6); g.textAlign='center';
+    g.globalAlpha=.6+Math.sin(t*4)*.4; g.fillText('💠',14,-64); g.globalAlpha=1; } },
+  envoy:{ front(g,t){ g.fillStyle='#e8c14e'; g.beginPath(); g.roundRect(-4,-50,8,3.4,1.2); g.fill();
+    g.fillStyle='#fff'; g.font=efont(3.4); g.textAlign='center'; g.fillText('🤝',0,-47.4); } },
+};
+
+
+const JOB_REQ = { t1:{lv:10, main:15}, t2:{lv:20, main:28, sub:12}, t3:{lv:30}, side:{lv:15} };
+const FX_LABEL = {
+  speed:v=>'이동 속도 +'+Math.round((v-1)*100)+'%', coin:v=>'골드 획득 +'+Math.round((v-1)*100)+'%',
+  sell:v=>'판매 가격 +'+Math.round((v-1)*100)+'%', petxp:v=>'펫 경험치 +'+Math.round((v-1)*100)+'%',
+  renown:v=>'명성 획득 +'+Math.round((v-1)*100)+'%', fish:v=>'낚시 판정 +'+Math.round(v*100)+'%',
+  cook:v=>'요리 버프 +'+v+'초', grow:v=>'밭 성장 '+Math.round((1-v)*100)+'% 빨라짐',
+  forage:v=>'채집 다시 자람 '+Math.round((1-v)*100)+'% 빨라짐',
+};
+
+/* -- 상태 -- */
+function grInit(){
+  if(!S) return;
+  schInit();
+  const sc = S.school;
+  if(sc.pts === undefined) sc.pts = 0;
+  if(!sc.job || !JOBS[sc.job]) sc.job = 'adventurer';
+  if(!Array.isArray(sc.side)) sc.side = [];
+  if(sc.ptsLv === undefined){            // 기존 저장 데이터: 지금 레벨까지 포인트 소급 지급
+    sc.ptsLv = 1;
+  }
+  if(S.level > sc.ptsLv){
+    sc.pts += (S.level - sc.ptsLv) * 2;
+    sc.ptsLv = S.level;
+  }
+}
+const curJob = () => (S && S.school && JOBS[S.school.job]) ? S.school.job : 'adventurer';
+
+/* -- 활성 직업 목록(효과 합산 대상): 현재 직업 + 부모 + 부업 -- */
+function activeJobs(){
+  if(!S || !S.school) return ['adventurer'];
+  const out = [S.school.job];
+  const j = JOBS[S.school.job];
+  if(j && j.parent) out.push(j.parent);
+  (S.school.side || []).forEach(id => { if(JOBS[id]) out.push(id); });
+  return out;
+}
+function jobFx(key){
+  let mul = 1, add = 0;
+  activeJobs().forEach(id => { const v = JOBS[id] && JOBS[id].fx[key]; if(v === undefined) return;
+    if(key === 'fish' || key === 'cook') add += v; else mul *= v; });
+  return (key === 'fish' || key === 'cook') ? add : mul;
+}
+
+/* -- 원본 배율 함수 감싸기 (원본 코드 수정 없음) -- */
+(function grWrap(){
+  const w = (name, mode) => {
+    const orig = window[name]; if(typeof orig !== 'function') return;
+    if(mode === 'mul')  window[name] = function(){ return orig.apply(this, arguments) * jobFx(name === 'lvSpeedMul' ? 'speed' : name === 'coinMul' ? 'coin' : name === 'sellMul' ? 'sell' : name === 'growMul' ? 'grow' : 'forage'); };
+    if(mode === 'add')  window[name] = function(){ return orig.apply(this, arguments) + jobFx(name === 'lvFishBonus' ? 'fish' : 'cook'); };
+  };
+  w('lvSpeedMul','mul'); w('coinMul','mul'); w('sellMul','mul'); w('growMul','mul'); w('forageCdMul','mul');
+  w('lvFishBonus','add'); w('cookDurBonus','add');
+  const oPet = window.petXpGain; if(typeof oPet === 'function') window.petXpGain = function(nx){ return oPet.call(this, Math.round(nx * jobFx('petxp'))); };
+  const oRen = window.addRenown; if(typeof oRen === 'function') window.addRenown = function(np){ return oRen.call(this, Math.round(np * jobFx('renown'))); };
+  /* 레벨업 → 스탯 포인트 +2 */
+  const oLv = window.levelUp;
+  if(typeof oLv === 'function') window.levelUp = function(){
+    oLv.apply(this, arguments);
+    grInit();
+    setTimeout(() => toast('🌟 스탯 포인트 +2! 성장 화면에서 나눠 주세요'), 1200);
+    setTimeout(grCheckPromote, 1800);
+  };
+})();
+
+/* -- 전직 조건 -- */
+function statsOf(){ return S.stats || {}; }
+function canTakeJob(id){
+  const j = JOBS[id]; if(!j) return {ok:false, why:[]};
+  const st = statsOf(), lv = S.level, why = [];
+  const need = (label, cur, min) => { if(cur < min) why.push(label + ' ' + cur + '/' + min); };
+  if(j.tier === 1){
+    need('Lv', lv, JOB_REQ.t1.lv); need(STATN[j.main].e + STATN[j.main].n, st[j.main]||0, JOB_REQ.t1.main);
+    if(curJob() !== 'adventurer' && JOBS[curJob()].tier >= 1) why.push('이미 1차 전직을 했어요');
+  } else if(j.tier === 2){
+    const p = JOBS[j.parent];
+    need('Lv', lv, JOB_REQ.t2.lv); need(STATN[p.main].e + STATN[p.main].n, st[p.main]||0, JOB_REQ.t2.main);
+    need(STATN[j.sub].e + STATN[j.sub].n, st[j.sub]||0, JOB_REQ.t2.sub);
+    if(curJob() !== j.parent) why.push(p.e + p.n + '만 될 수 있어요');
+  } else if(j.tier === 3){
+    need('Lv', lv, JOB_REQ.t3.lv);
+    j.balance.forEach(k => need(STATN[k].e + STATN[k].n, st[k]||0, j.min));
+    if(JOBS[curJob()].tier < 2) why.push('2차 전직 후에 가능해요');
+  } else if(j.tier === 'side'){
+    need('Lv', lv, JOB_REQ.side.lv);
+    if(!(S.titles||[]).includes(j.title)) why.push('칭호 「' + (TITLES[j.title] ? TITLES[j.title].n : j.title) + '」 필요');
+    if((S.school.side||[]).includes(id)) why.push('이미 하고 있어요');
+  } else return {ok:false, why:['-']};
+  return {ok: why.length === 0, why};
+}
+function nextJobs(){
+  const cj = JOBS[curJob()];
+  if(cj.tier === 0) return Object.keys(JOBS).filter(k => JOBS[k].tier === 1);
+  if(cj.tier === 1) return Object.keys(JOBS).filter(k => JOBS[k].tier === 2 && JOBS[k].parent === curJob());
+  if(cj.tier === 2) return Object.keys(JOBS).filter(k => JOBS[k].tier === 3);
+  return [];
+}
+function grCheckPromote(){
+  if(!S || !S.school) return;
+  const ready = nextJobs().filter(id => canTakeJob(id).ok);
+  if(ready.length) banner('🌟 전직할 수 있어요!', ready.map(id => JOBS[id].e + JOBS[id].n).join(' · ') + ' — 성장 화면에서 선택');
+}
+function takeJob(id){
+  const c = canTakeJob(id); if(!c.ok){ toast('아직이에요: ' + c.why[0]); sNo(); return; }
+  const j = JOBS[id];
+  if(j.tier === 'side'){ S.school.side.push(id); }
+  else { S.school.job = id; S.school.jobLv = j.tier; }
+  saveGame(); sLevel(); confetti(40);
+  banner(j.e + ' ' + j.n + '이(가) 되었어요!', j.desc);
+  openGrowth(); grBurst();
+}
+
+/* -- 스탯 배분 -- */
+function addStat(k){
+  if(!S.school || S.school.pts <= 0){ toast('스탯 포인트가 없어요. 레벨을 올려요!'); sNo(); return; }
+  if(S.stats[k] >= 99){ toast('최대치예요'); return; }
+  S.stats[k]++; S.school.pts--;
+  sYes(); saveGame(); openGrowth(true);
+  const ready = nextJobs().filter(id => canTakeJob(id).ok);
+  if(ready.length && S.school.pts === 0) setTimeout(grCheckPromote, 400);
+}
+
+/* -- 성장 화면 -- */
+let grAnim = null;
+function openGrowth(keep){
+  grInit();
+  const j = JOBS[curJob()], st = statsOf(), pts = S.school.pts;
+  const lo = LEVEL_XP[S.level-1], hi = LEVEL_XP[S.level] || lo + 1;
+  const xpPct = Math.round(Math.min(100, (S.xp - lo) / (hi - lo) * 100));
+  const tierName = {0:'시작', 1:'1차 직업', 2:'2차 직업', 3:'전설 직업'}[j.tier] || '';
+  const sideJobs = (S.school.side||[]).map(id => JOBS[id].e + JOBS[id].n).join(' ');
+  let h = `
+  <div class="card" style="text-align:center;padding:10px 12px 6px">
+    <div style="position:relative;width:100%;max-width:340px;margin:0 auto">
+      <canvas id="grCv" width="640" height="800" style="width:100%;height:auto;display:block;border-radius:16px;background:linear-gradient(#e8f4ff,#fff7ec)"></canvas>
+      <img id="grImg" alt="" style="display:none;position:absolute;inset:0;width:100%;height:100%;object-fit:contain;border-radius:16px;background:linear-gradient(#e8f4ff,#fff7ec)">
+      <div style="position:absolute;top:8px;left:8px;background:#fff;border-radius:99px;padding:4px 10px;font-size:13px;box-shadow:0 2px 0 rgba(0,0,0,.08)">${j.e} ${j.n}</div>
+      <div style="position:absolute;top:8px;right:8px;background:#ffd97a;border-radius:99px;padding:4px 10px;font-size:13px;box-shadow:0 2px 0 rgba(0,0,0,.08)">Lv.${S.level}</div>
+    </div>
+    <div style="font-size:16px;margin-top:8px">${pname()} ${hon()} · <b>${j.n}</b> <span class="small">(${tierName})</span></div>
+    <div class="small">${j.desc}</div>
+    ${sideJobs ? '<div class="small">부업: ' + sideJobs + '</div>' : ''}
+    <div class="statbar" style="margin-top:8px"><div class="statfill" style="width:${xpPct}%;background:linear-gradient(90deg,#ffd97a,#ff8fb8)"></div></div>
+    <div class="small">${S.level < LEVEL_XP.length ? '다음 레벨까지 ' + (hi - S.xp) + ' XP' : '최고 레벨!'}</div>
+  </div>`;
+
+  /* 스탯 배분 */
+  h += `<div class="card"><div class="rowline"><div style="font-size:15px">📊 능력치</div><div class="grow"></div>
+    <div style="background:${pts>0?'#ffd97a':'#eee'};border-radius:99px;padding:3px 10px;font-size:13px">남은 포인트 <b>${pts}</b></div></div>`;
+  for(const k in STATN){
+    const s = STATN[k], v = st[k] || 0;
+    h += `<div class="rowline" style="margin-top:8px">
+      <div style="width:76px">${s.e} ${s.n}</div>
+      <div class="grow"><div class="statbar" style="margin:0"><div class="statfill" style="width:${Math.min(100, v*2)}%;background:${s.c}"></div></div></div>
+      <div style="width:28px;text-align:right;color:${s.c}"><b>${v}</b></div>
+      <button class="pillbtn ${pts>0?'':'gray'} grAdd" data-k="${k}" style="padding:4px 11px;font-size:15px" ${pts>0?'':'disabled'}>+</button></div>`;
+  }
+  h += `<div class="small" style="margin-top:8px">레벨이 오르면 포인트 2개. 어디에 쓰느냐에 따라 될 수 있는 직업이 달라져요!</div></div>`;
+
+  /* 직업 효과 */
+  const fxKeys = Object.keys(FX_LABEL).filter(k => { const v = jobFx(k); return (k==='fish'||k==='cook') ? v > 0 : v !== 1; });
+  if(fxKeys.length) h += `<div class="card"><div style="font-size:15px">✨ 직업 효과</div><div class="small" style="margin-top:4px">${fxKeys.map(k => FX_LABEL[k](jobFx(k))).join(' · ')}</div></div>`;
+
+  /* 다음 전직 */
+  const nx = nextJobs();
+  if(nx.length){
+    const req = j.tier === 0 ? 'Lv.10 · 주 능력치 15' : j.tier === 1 ? 'Lv.20 · 주 능력치 28 · 두 번째 능력치 12' : 'Lv.30 · 능력치 균형';
+    h += `<div class="card"><div style="font-size:15px">🌟 다음 전직 <span class="small">(${req})</span></div>`;
+    nx.forEach(id => {
+      const jj = JOBS[id], c = canTakeJob(id);
+      const keyStat = jj.tier === 1 ? jj.main : jj.tier === 2 ? jj.sub : null;
+      h += `<div class="rowline" style="margin-top:8px;padding:8px;border-radius:12px;background:${c.ok?'#fff3c4':'#faf6f2'}">
+        <div style="font-size:22px">${jj.e}</div>
+        <div class="grow"><div>${jj.n}${keyStat ? ' <span class="small">' + STATN[keyStat].e + STATN[keyStat].n + '</span>' : ''}</div>
+          <div class="small">${c.ok ? '✅ 지금 전직할 수 있어요!' : c.why.join(' · ')}</div></div>
+        <button class="pillbtn ${c.ok?'':'gray'} grTake" data-j="${id}" ${c.ok?'':'disabled'}>${c.ok?'전직':'🔒'}</button></div>`;
+    });
+    h += '</div>';
+  }
+
+  /* 부업 */
+  const sides = Object.keys(JOBS).filter(k => JOBS[k].tier === 'side');
+  h += `<div class="card"><div style="font-size:15px">🎖️ 부업 <span class="small">(Lv.15 + 칭호 · 본업과 함께 할 수 있어요)</span></div>`;
+  sides.forEach(id => {
+    const jj = JOBS[id], c = canTakeJob(id), has = (S.school.side||[]).includes(id);
+    h += `<div class="rowline" style="margin-top:8px;padding:8px;border-radius:12px;background:${has?'#e6f7ee':c.ok?'#fff3c4':'#faf6f2'}">
+      <div style="font-size:22px">${jj.e}</div>
+      <div class="grow"><div>${jj.n} <span class="small">· ${TITLES[jj.title] ? TITLES[jj.title].e + TITLES[jj.title].n : ''}</span></div>
+        <div class="small">${has ? '✅ 활동 중 · ' + Object.keys(jj.fx).map(k=>FX_LABEL[k](jj.fx[k])).join(', ') : c.ok ? '지금 시작할 수 있어요!' : c.why.join(' · ')}</div></div>
+      ${has ? '' : `<button class="pillbtn ${c.ok?'':'gray'} grTake" data-j="${id}" ${c.ok?'':'disabled'}>${c.ok?'시작':'🔒'}</button>`}</div>`;
+  });
+  h += '</div>';
+
+  if(keep && document.getElementById('mbody')) document.getElementById('mbody').innerHTML = h;
+  else openModal('🌟 나의 성장', h);
+
+  document.querySelectorAll('.grAdd').forEach(b => b.addEventListener('pointerdown', () => { if(!b.disabled) addStat(b.dataset.k); }));
+  document.querySelectorAll('.grTake').forEach(b => b.addEventListener('pointerdown', () => { if(!b.disabled) takeJob(b.dataset.j); }));
+  grDrawChar();
+}
+
+/* -- 대형 캐릭터: 확대 + 직업 장비 오버레이 (일러스트 있으면 우선) -- */
+function gearOf(id){
+  const j = JOBS[id]; if(!j) return null;
+  if(JOBGEAR[id]) return JOBGEAR[id];
+  if(j.parent && JOBGEAR[j.parent]) return JOBGEAR[j.parent];
+  return null;
+}
+function drawJobGear(g, id, t, layer){
+  const base = gearOf(id), ex = JOBGEAR_EXTRA[id], side = SIDEGEAR[id];
+  const call = obj => { if(obj && obj[layer]) { g.save(); try{ obj[layer](g, t); }catch(e){} g.restore(); } };
+  call(base); call(ex); call(side);
+}
+/* 캐릭터 + 장비를 한 번에 그림 (성장 화면 / 프리뷰 공용) */
+function drawHeroBig(g, cx, cy, scale, t){
+  const id = curJob(), sides = (S.school && S.school.side) || [];
+  g.save(); g.translate(cx, cy); g.scale(scale, scale);
+  drawJobGear(g, id, t, 'back');
+  sides.forEach(s => drawJobGear(g, s, t, 'back'));
+  g.restore();
+  g.save(); try{ drawPrincess(g, cx, cy, scale, 0, false, S.outfit); }catch(e){} g.restore();
+  g.save(); g.translate(cx, cy); g.scale(scale, scale);
+  drawJobGear(g, id, t, 'lower');
+  drawJobGear(g, id, t, 'front');
+  sides.forEach(s => drawJobGear(g, s, t, 'front'));
+  g.restore();
+}
+let grAnim2 = null, grSparks = [];
+function grBurst(){                       // 전직·아이템 획득 시 반짝임
+  grSparks = [];
+  for(let i = 0; i < 22; i++) grSparks.push({
+    a: Math.random() * Math.PI * 2, d: 20 + Math.random() * 50,
+    s: 0.5 + Math.random() * 0.9, life: 1, e: ['✦','✧','⭐','✨'][i % 4]
+  });
+}
+function grDrawChar(){
+  const cv = document.getElementById('grCv'), img = document.getElementById('grImg');
+  if(!cv) return;
+  const src = 'img/jobs/' + curJob() + '_' + (isBoy() ? 'boy' : 'girl') + '.png';
+  img.onload = () => { img.style.display = 'block'; cv.style.visibility = 'hidden'; };
+  img.onerror = () => { img.style.display = 'none'; cv.style.visibility = 'visible'; };
+  img.src = src;
+  const g = cv.getContext('2d');
+  if(grAnim) { cancelAnimationFrame(grAnim); grAnim = null; }
+  const j = JOBS[curJob()];
+  const W = cv.width, H = cv.height;
+  const SCALE = W / 95.5;                 // 캔버스 폭 기준 자동 (맵 대비 약 7배)
+  const FOOT = H - 70;
+  let t0 = performance.now();
+  const loop = () => {
+    if(!document.getElementById('grCv')){ grAnim = null; return; }
+    const t = (performance.now() - t0) / 1000;
+    g.clearRect(0, 0, W, H);
+    /* 배경: 직업 색 무드 */
+    const bg = g.createRadialGradient(W/2, H*0.42, 10, W/2, H*0.42, H*0.72);
+    bg.addColorStop(0, 'rgba(255,255,255,.95)'); bg.addColorStop(1, 'rgba(255,255,255,0)');
+    g.fillStyle = bg; g.fillRect(0, 0, W, H);
+    /* 직업 아이콘 워터마크 */
+    g.save(); g.globalAlpha = .10; g.font = efont(W * 0.55); g.textAlign = 'center'; g.textBaseline = 'middle';
+    g.fillText(j.e, W/2, H * 0.40); g.restore();
+    /* 무대 원 */
+    g.fillStyle = 'rgba(255,255,255,.6)'; g.beginPath(); g.ellipse(W/2, FOOT + 12, W*0.26, 26, 0, 0, 7); g.fill();
+    g.strokeStyle = 'rgba(180,160,200,.35)'; g.lineWidth = 1.5; g.stroke();
+    /* 캐릭터 + 장비 */
+    drawHeroBig(g, W/2, FOOT, SCALE, t);
+    /* 반짝임 */
+    if(grSparks.length){
+      g.textAlign = 'center'; g.textBaseline = 'middle';
+      grSparks = grSparks.filter(s => s.life > 0);
+      grSparks.forEach(s => {
+        s.life -= 0.014; s.d += 0.5;
+        g.globalAlpha = Math.max(0, s.life);
+        g.font = efont(30 * s.s);
+        g.fillStyle = '#ffd45e';
+        g.fillText(s.e, W/2 + Math.cos(s.a) * s.d * 2.4, FOOT - 300 + Math.sin(s.a) * s.d * 1.7);
+      });
+      g.globalAlpha = 1;
+    }
+    grAnim = requestAnimationFrame(loop);
+  };
+  loop();
+}
+
+/* -- 버튼 등록 -- */
+(function grSetup(){
+  const wrap = document.getElementById('menubtns');
+  if(wrap && !document.getElementById('btnGrowth')){
+    const b = document.createElement('button');
+    b.className = 'mbtn'; b.id = 'btnGrowth'; b.textContent = '🌟';
+    const after = document.getElementById('btnSchool');
+    if(after && after.nextSibling) wrap.insertBefore(b, after.nextSibling); else wrap.insertBefore(b, wrap.firstChild);
+    b.addEventListener('pointerdown', () => { audio(); if(uiOpen > 0) return; openGrowth(); });
+  }
+  let tries = 0;
+  const warm = setInterval(() => { if(S){ grInit(); clearInterval(warm); } else if(++tries > 40) clearInterval(warm); }, 500);
 })();
 
 </script>
