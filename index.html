@@ -6322,6 +6322,189 @@ function grTitleTag(){
   const warm = setInterval(() => { if(S){ grInit(); clearInterval(warm); } else if(++tries > 40) clearInterval(warm); }, 500);
 })();
 
+/* ==================================================================
+   안정화 · 키보드 · 맵 일러스트 모듈 (class-quest)
+   1) 게임 루프 안전장치 — 오류가 나도 멈추지 않음
+   2) 낚시 루프 중복 실행 차단 (3~4회 후 멈춤 버그 수정)
+   3) 키보드 조작 (방향키 · WASD · 스페이스/엔터)
+   4) 맵 캐릭터를 직업 일러스트로 표시 (A안, 방향 확장 대비)
+   ================================================================== */
+
+/* -- 1. 게임 루프 안전장치 --
+   원본 loop()는 requestAnimationFrame이 맨 끝에 있어서,
+   그 전에 오류가 한 번이라도 나면 다음 프레임이 예약되지 않아 화면이 영구히 멈춥니다. */
+let fxLastFrame = Date.now();
+let fxErrCount = 0;
+(function fxSafeLoop(){
+  const origLoop = window.loop;
+  if(typeof origLoop !== 'function') return;
+  window.loop = function(){
+    fxLastFrame = Date.now();
+    try{
+      origLoop();                       // 정상 종료 시 내부에서 다음 프레임 예약
+    }catch(e){
+      fxErrCount++;
+      if(fxErrCount <= 3) console.error('[게임 루프 오류]', e);
+      requestAnimationFrame(window.loop);   // 오류가 나도 계속 돌린다
+    }
+  };
+  /* 감시견: 2초 넘게 프레임이 멈추면 스스로 되살림 */
+  setInterval(() => {
+    if(document.hidden) { fxLastFrame = Date.now(); return; }
+    if(typeof S === 'undefined' || !S) return;
+    if(Date.now() - fxLastFrame > 2000){
+      fxLastFrame = Date.now();
+      requestAnimationFrame(window.loop);
+      if(typeof toast === 'function') toast('화면을 다시 이어요 🔄');
+    }
+  }, 2000);
+})();
+
+/* -- 2. 낚시 루프 중복 실행 차단 --
+   '다시 하기'를 누르면 openFishing()이 다시 호출되는데, 이전 fishLoop이 살아 있어
+   낚시를 반복할수록 루프가 2배씩 늘어납니다(3~4회면 8~16개). 태블릿이 버티지 못해 멈춰요. */
+let fxFishGen = 0;
+(function fxFishFix(){
+  const oOpen = window.openFishing, oLoop = window.fishLoop;
+  if(typeof oOpen === 'function'){
+    window.openFishing = function(){
+      fxFishGen++;
+      oOpen.apply(this, arguments);
+      try{ if(fish) fish._gen = fxFishGen; }catch(e){}
+    };
+  }
+  if(typeof oLoop === 'function'){
+    window.fishLoop = function(){
+      try{
+        if(typeof fish === 'undefined' || !fish || !fish.on) return;
+        if(fish._gen !== undefined && fish._gen !== fxFishGen) return;  // 옛 루프는 여기서 종료
+        oLoop.apply(this, arguments);
+      }catch(e){ console.error('[낚시 오류]', e); }
+    };
+  }
+  /* 포획 루프도 같은 방식으로 보호 */
+  const oCap = window.capLoop;
+  if(typeof oCap === 'function'){
+    window.capLoop = function(){
+      try{
+        if(typeof cap === 'undefined' || !cap || !cap.on) return;
+        oCap.apply(this, arguments);
+      }catch(e){ console.error('[포획 오류]', e); }
+    };
+  }
+})();
+
+/* -- 3. 키보드 조작 --
+   방향키 / WASD 이동, 스페이스·엔터 = 상호작용, ESC = 닫기 */
+(function fxKeyboard(){
+  const held = {};
+  const MAP = {
+    ArrowUp:'u', ArrowDown:'d', ArrowLeft:'l', ArrowRight:'r',
+    KeyW:'u', KeyS:'d', KeyA:'l', KeyD:'r'
+  };
+  const isTyping = () => {
+    const a = document.activeElement;
+    return a && (a.tagName === 'INPUT' || a.tagName === 'TEXTAREA' || a.isContentEditable);
+  };
+  window.addEventListener('keydown', e => {
+    if(isTyping()) return;
+    if(e.code === 'Escape'){ if(typeof closeModal === 'function') closeModal(); return; }
+    if(e.code === 'Space' || e.code === 'Enter'){
+      e.preventDefault();
+      if(typeof audio === 'function') audio();
+      const b = document.getElementById('actbtn');
+      if(b && !b.classList.contains('off')) b.dispatchEvent(new PointerEvent('pointerdown', {bubbles:true, cancelable:true}));
+      return;
+    }
+    const k = MAP[e.code];
+    if(!k) return;
+    e.preventDefault();
+    if(typeof audio === 'function') audio();
+    held[k] = true;
+  }, {passive:false});
+  window.addEventListener('keyup', e => { const k = MAP[e.code]; if(k) held[k] = false; });
+  window.addEventListener('blur', () => { for(const k in held) held[k] = false; });
+
+  /* 매 프레임 조이스틱 값에 키보드 입력을 합칩니다 */
+  const origUpdate = window.update;
+  if(typeof origUpdate === 'function'){
+    window.update = function(dt){
+      try{
+        let kx = (held.r ? 1 : 0) - (held.l ? 1 : 0);
+        let ky = (held.d ? 1 : 0) - (held.u ? 1 : 0);
+        if(kx || ky){
+          const n = Math.hypot(kx, ky) || 1;
+          joy.dx = kx / n; joy.dy = ky / n;
+        } else if(!joy.active && (joy._kb)){
+          joy.dx = 0; joy.dy = 0;
+        }
+        joy._kb = !!(kx || ky);
+      }catch(e){}
+      return origUpdate.apply(this, arguments);
+    };
+  }
+})();
+
+/* -- 4. 맵 캐릭터를 직업 일러스트로 (A안) --
+   서 있는 그림 1장을 맵에 씁니다. 걸을 때는 살짝 위아래로 흔들려 생동감을 줍니다.
+   ▸ 나중에 방향별 그림(_back / _side)을 넣으면 자동으로 방향 전환합니다. */
+const MAP_ART = { on:true, scale:1.0, cache:{}, missing:{} };
+function fxArtKey(dir){
+  const job = (typeof curJob === 'function') ? curJob() : 'adventurer';
+  const sex = (typeof isBoy === 'function' && isBoy()) ? 'boy' : 'girl';
+  return job + '_' + sex + (dir && dir !== 'front' ? '_' + dir : '');
+}
+function fxGetArt(key){
+  if(MAP_ART.missing[key]) return null;
+  let im = MAP_ART.cache[key];
+  if(im) return im.complete && im.naturalWidth ? im : null;
+  im = new Image();
+  im.decoding = 'async';
+  let step = 0;
+  im.onerror = () => {
+    step++;
+    if(step === 1){ im.src = 'img/jobs/' + key + '.png'; return; }
+    MAP_ART.missing[key] = true;
+  };
+  im.src = 'img/jobs/' + key + '.webp';
+  MAP_ART.cache[key] = im;
+  return null;
+}
+/* 방향 판정: 나중에 방향별 그림이 생기면 자동 사용 */
+function fxDirOf(){
+  const dx = player.lastdx || 0, dy = player.lastdy || 0;
+  if(Math.abs(dy) > Math.abs(dx)) return dy < 0 ? 'back' : 'front';
+  return 'side';
+}
+(function fxMapArt(){
+  const origDraw = window.drawPrincess;
+  if(typeof origDraw !== 'function') return;
+  window.drawPrincess = function(g, x, y, s, walkT, moving, o){
+    const isMapPlayer = (s >= 1.2 && s <= 1.6);   // v1.7에서 맵 배율은 약 1.349
+    if(!MAP_ART.on || !isMapPlayer) return origDraw.apply(this, arguments);
+    /* 방향별 그림이 있으면 그것, 없으면 정면 그림 */
+    const dir = fxDirOf();
+    let key = fxArtKey(dir), art = fxGetArt(key);
+    if(!art && dir !== 'front'){ key = fxArtKey('front'); art = fxGetArt(key); }
+    if(!art) return origDraw.apply(this, arguments);   // 아직 로딩 중이거나 없는 직업 → 벡터
+    /* 그림 그리기: 발끝을 y에 맞추고, 걸을 때 살짝 통통 */
+    const H = 96 * s * MAP_ART.scale;                 // 화면상 캐릭터 높이
+    const W = H * (art.naturalWidth / art.naturalHeight);
+    const bob = moving ? Math.abs(Math.sin(walkT * 9)) * H * 0.035 : 0;
+    const flip = (dir === 'side' && (player.lastdx || 0) < 0);
+    g.save();
+    /* 그림자 */
+    g.globalAlpha = 0.16; g.fillStyle = '#000';
+    g.beginPath(); g.ellipse(x, y - 1, W * 0.26, H * 0.05, 0, 0, 7); g.fill();
+    g.globalAlpha = 1;
+    g.translate(x, y - bob);
+    if(flip) g.scale(-1, 1);
+    g.imageSmoothingEnabled = true;
+    try{ g.drawImage(art, -W/2, -H, W, H); }catch(e){}
+    g.restore();
+  };
+})();
+
 </script>
 </body>
 </html>
