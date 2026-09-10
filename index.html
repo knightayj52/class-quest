@@ -6551,7 +6551,7 @@ let fxFishGen = 0;
 /* -- 4. 맵 캐릭터를 직업 일러스트로 (A안) --
    서 있는 그림 1장을 맵에 씁니다. 걸을 때는 살짝 위아래로 흔들려 생동감을 줍니다.
    ▸ 나중에 방향별 그림(_back / _side)을 넣으면 자동으로 방향 전환합니다. */
-const MAP_ART = { on:true, scale:1.0, cache:{}, missing:{} };
+const MAP_ART = { on:true, height:150, cache:{}, missing:{} };  // 화면상 캐릭터 높이(px)
 function fxArtKey(dir){
   const job = (typeof curJob === 'function') ? curJob() : 'adventurer';
   const sex = (typeof isBoy === 'function' && isBoy()) ? 'boy' : 'girl';
@@ -6575,7 +6575,9 @@ function fxGetArt(key){
 }
 /* 방향 판정: 나중에 방향별 그림이 생기면 자동 사용 */
 function fxDirOf(){
+  if(!player.moving) return 'front';
   const dx = player.lastdx || 0, dy = player.lastdy || 0;
+  if(!dx && !dy) return 'front';
   if(Math.abs(dy) > Math.abs(dx)) return dy < 0 ? 'back' : 'front';
   return 'side';
 }
@@ -6583,7 +6585,7 @@ function fxDirOf(){
   const origDraw = window.drawPrincess;
   if(typeof origDraw !== 'function') return;
   window.drawPrincess = function(g, x, y, s, walkT, moving, o){
-    const isMapPlayer = (s >= 1.2 && s <= 1.6);   // v1.7에서 맵 배율은 약 1.349
+    const isMapPlayer = (s >= 0.85 && s <= 1.05); // 맵 플레이어 원본 배율
     if(!MAP_ART.on || !isMapPlayer) return origDraw.apply(this, arguments);
     /* 방향별 그림이 있으면 그것, 없으면 정면 그림 */
     const dir = fxDirOf();
@@ -6591,7 +6593,7 @@ function fxDirOf(){
     if(!art && dir !== 'front'){ key = fxArtKey('front'); art = fxGetArt(key); }
     if(!art) return origDraw.apply(this, arguments);   // 아직 로딩 중이거나 없는 직업 → 벡터
     /* 그림 그리기: 발끝을 y에 맞추고, 걸을 때 살짝 통통 */
-    const H = 96 * s * MAP_ART.scale;                 // 화면상 캐릭터 높이
+    const H = MAP_ART.height * s;                     // 화면상 캐릭터 높이
     const W = H * (art.naturalWidth / art.naturalHeight);
     const bob = moving ? Math.abs(Math.sin(walkT * 9)) * H * 0.035 : 0;
     const flip = (dir === 'side' && (player.lastdx || 0) < 0);
