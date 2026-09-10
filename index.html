@@ -6008,6 +6008,57 @@ function addStat(k){
   if(ready.length && S.school.pts === 0) setTimeout(grCheckPromote, 400);
 }
 
+
+/* -- 아이템 슬롯 (C안): 보유·착용 아이템을 한눈에 -- */
+const SLOT_DEF = [
+  {k:'acc',    n:'머리',   e:'👑', pool:()=>ACCS,    own:()=>S.owned.accs,    wear:()=>S.outfit.acc},
+  {k:'dress',  n:'의상',   e:'👗', pool:()=>DRESSES, own:()=>S.owned.dresses, wear:()=>S.outfit.dress},
+  {k:'shoes',  n:'신발',   e:'👠', pool:()=>SHOES,   own:()=>S.owned.shoes,   wear:()=>S.outfit.shoes},
+  {k:'wings',  n:'날개',   e:'🦋', pool:()=>WINGS,   own:()=>S.owned.wings,   wear:()=>S.outfit.wings},
+  {k:'wand',   n:'요술봉', e:'🪄', pool:()=>WANDS,   own:()=>S.owned.wands,   wear:()=>S.outfit.wand},
+  {k:'gloves', n:'장갑',   e:'🧤', pool:()=>GLOVES,  own:()=>S.owned.gloves,  wear:()=>S.outfit.gloves},
+];
+function slotHTML(){
+  let charmSum = 0, ownTotal = 0, poolTotal = 0;
+  let h = '<div class="card"><div class="rowline"><div style="font-size:15px">🎒 나의 장비</div>'
+        + '<div class="grow"></div><div class="small" id="slotSum"></div></div>'
+        + '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:7px;margin-top:8px">';
+  SLOT_DEF.forEach(s => {
+    const pool = s.pool() || {}, own = s.own() || [], wear = s.wear();
+    const it = wear && pool[wear] ? pool[wear] : null;
+    if(it && it.charm) charmSum += it.charm;
+    ownTotal += own.length; poolTotal += Object.keys(pool).length;
+    const col = it ? '#fff6e0' : '#f4f1fa';
+    h += '<div style="border:2.5px solid ' + (it ? '#e8c86a' : '#ddd4ee') + ';border-radius:14px;'
+      + 'background:' + col + ';padding:8px 6px;text-align:center">'
+      + '<div style="font-size:22px;line-height:1.1">' + (it ? s.e : '<span style="opacity:.28">' + s.e + '</span>') + '</div>'
+      + '<div class="small" style="margin-top:2px">' + s.n + '</div>'
+      + '<div style="font-size:12.5px;margin-top:2px;min-height:16px">'
+      + (it ? it.n : '<span style="color:#b0a4c8">없음</span>') + '</div>'
+      + '<div class="small" style="color:#c98fb0">' + (it && it.charm ? '💖+' + it.charm : '') + '</div>'
+      + '<div class="small" style="color:#a99bc0">' + own.length + '/' + Object.keys(pool).length + ' 보유</div>'
+      + '</div>';
+  });
+  h += '</div>';
+  /* 펫 · 칭호 */
+  const pet = S.activePet !== null && S.pets[S.activePet] ? S.pets[S.activePet] : null;
+  const ttl = S.title && TITLES[S.title] ? TITLES[S.title] : null;
+  h += '<div class="rowline" style="margin-top:8px;gap:7px">'
+    + '<div class="grow" style="border:2.5px solid ' + (pet ? '#a8d8b8' : '#ddd4ee') + ';border-radius:14px;background:'
+    + (pet ? '#eef9f1' : '#f4f1fa') + ';padding:8px;text-align:center">'
+    + '<div class="small">🐾 함께하는 친구</div><div style="font-size:14px">'
+    + (pet ? (PETSPEC[pet.sp] ? PETSPEC[pet.sp].e : '🐾') + ' ' + pet.name : '<span style="color:#b0a4c8">없음</span>') + '</div></div>'
+    + '<div class="grow" style="border:2.5px solid ' + (ttl ? '#e8c86a' : '#ddd4ee') + ';border-radius:14px;background:'
+    + (ttl ? '#fff6e0' : '#f4f1fa') + ';padding:8px;text-align:center">'
+    + '<div class="small">🏅 칭호</div><div style="font-size:14px">'
+    + (ttl ? ttl.e + ' ' + ttl.n : '<span style="color:#b0a4c8">없음</span>') + '</div></div></div>';
+  h += '<div class="rowline" style="margin-top:8px">'
+    + '<button class="pillbtn grow" id="grCloset">👗 옷장에서 바꾸기</button></div>'
+    + '<div class="small" style="margin-top:6px">모은 아이템 <b>' + ownTotal + '</b> / ' + poolTotal
+    + ' · 착용 매력 보너스 <b style="color:#ff8fb8">💖+' + charmSum + '</b></div></div>';
+  return h;
+}
+
 /* -- 성장 화면 -- */
 let grAnim = null;
 function openGrowth(keep){
@@ -6049,6 +6100,9 @@ function openGrowth(keep){
   const fxKeys = Object.keys(FX_LABEL).filter(k => { const v = jobFx(k); return (k==='fish'||k==='cook') ? v > 0 : v !== 1; });
   if(fxKeys.length) h += `<div class="card"><div style="font-size:15px">✨ 직업 효과</div><div class="small" style="margin-top:4px">${fxKeys.map(k => FX_LABEL[k](jobFx(k))).join(' · ')}</div></div>`;
 
+  /* 아이템 슬롯 */
+  h += slotHTML();
+
   /* 다음 전직 */
   const nx = nextJobs();
   if(nx.length){
@@ -6082,6 +6136,8 @@ function openGrowth(keep){
   if(keep && document.getElementById('mbody')) document.getElementById('mbody').innerHTML = h;
   else openModal('🌟 나의 성장', h);
 
+  const cl = document.getElementById('grCloset');
+  if(cl) cl.addEventListener('pointerdown', () => { if(typeof openCloset === 'function') openCloset(); });
   document.querySelectorAll('.grAdd').forEach(b => b.addEventListener('pointerdown', () => { if(!b.disabled) addStat(b.dataset.k); }));
   document.querySelectorAll('.grTake').forEach(b => b.addEventListener('pointerdown', () => { if(!b.disabled) takeJob(b.dataset.j); }));
   grDrawChar();
