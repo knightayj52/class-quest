@@ -6548,6 +6548,51 @@ let fxFishGen = 0;
   }
 })();
 
+
+/* -- 5. HUD 초상화를 직업 일러스트 얼굴로 --
+   왼쪽 위 동그란 아이콘이 현재 직업 그림의 얼굴 부분을 보여줍니다. */
+function fxUpdatePortrait(){
+  const el = document.getElementById('portrait');
+  if(!el) return;
+  const key = fxArtKey('front');
+  const art = fxGetArt(key);
+  if(!art){                                  // 아직 로딩 중 → 잠시 후 재시도
+    if(!MAP_ART.missing[key]) setTimeout(fxUpdatePortrait, 400);
+    return;
+  }
+  if(el.dataset.artKey === key) return;
+  el.dataset.artKey = key;
+  el.textContent = '';
+  el.style.overflow = 'hidden';
+  el.style.background = 'linear-gradient(#eaf4ff,#fff6ee)';
+  el.style.position = 'relative';
+  let im = el.querySelector('img.fxface');
+  if(!im){
+    im = document.createElement('img');
+    im.className = 'fxface';
+    im.style.cssText = 'position:absolute;left:50%;top:0;transform:translateX(-50%);'
+      + 'width:290%;height:auto;pointer-events:none;image-rendering:auto;';
+    el.appendChild(im);
+  }
+  im.src = art.src;
+  /* 얼굴이 동그라미 안에 오도록 위쪽으로 맞춤 */
+  im.style.marginTop = '-6%';
+}
+(function fxPortraitSetup(){
+  /* 직업이 바뀌거나 성별이 바뀔 때 갱신 */
+  const oUp = window.updateHUD;
+  if(typeof oUp === 'function') window.updateHUD = function(){
+    oUp.apply(this, arguments);
+    try{ fxUpdatePortrait(); }catch(e){}
+  };
+  setTimeout(fxUpdatePortrait, 1200);
+})();
+
+/* -- 6. 걷기 모션 개선 --
+   정면 그림 한 장이라도 살짝 기울고 좌우로 흔들리면 걷는 느낌이 납니다.
+   방향 그림(_back/_side)이 추가되면 자연스럽게 함께 어울립니다. */
+
+
 /* -- 4. 맵 캐릭터를 직업 일러스트로 (A안) --
    서 있는 그림 1장을 맵에 씁니다. 걸을 때는 살짝 위아래로 흔들려 생동감을 줍니다.
    ▸ 나중에 방향별 그림(_back / _side)을 넣으면 자동으로 방향 전환합니다. */
@@ -6595,15 +6640,23 @@ function fxDirOf(){
     /* 그림 그리기: 발끝을 y에 맞추고, 걸을 때 살짝 통통 */
     const H = MAP_ART.height * s;                     // 화면상 캐릭터 높이
     const W = H * (art.naturalWidth / art.naturalHeight);
-    const bob = moving ? Math.abs(Math.sin(walkT * 9)) * H * 0.035 : 0;
+    /* 걷기 모션: 위아래 통통 + 좌우 기울기 + 살짝 흔들림 */
+    const ph = walkT * 9;
+    const bob   = moving ? Math.abs(Math.sin(ph)) * H * 0.030 : 0;
+    const tilt  = moving ? Math.sin(ph) * 0.055 : 0;          // 라디안, 약 3도
+    const sway  = moving ? Math.cos(ph) * W * 0.020 : 0;      // 좌우 흔들림
+    const squash= moving ? 1 + Math.abs(Math.cos(ph)) * 0.018 : 1;  // 발 디딜 때 눌림
     const flip = (dir === 'side' && (player.lastdx || 0) < 0);
     g.save();
-    /* 그림자 */
+    /* 그림자 — 뛸 때 살짝 작아짐 */
     g.globalAlpha = 0.16; g.fillStyle = '#000';
-    g.beginPath(); g.ellipse(x, y - 1, W * 0.26, H * 0.05, 0, 0, 7); g.fill();
+    const shs = 1 - (bob / (H * 0.030 || 1)) * 0.12;
+    g.beginPath(); g.ellipse(x + sway * 0.4, y - 1, W * 0.26 * shs, H * 0.048 * shs, 0, 0, 7); g.fill();
     g.globalAlpha = 1;
-    g.translate(x, y - bob);
+    g.translate(x + sway, y - bob);
+    g.rotate(tilt);
     if(flip) g.scale(-1, 1);
+    g.scale(1, squash);
     g.imageSmoothingEnabled = true;
     try{ g.drawImage(art, -W/2, -H, W, H); }catch(e){}
     g.restore();
