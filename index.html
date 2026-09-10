@@ -6186,10 +6186,16 @@ function grBurst(){                       // 전직·아이템 획득 시 반짝
 function grDrawChar(){
   const cv = document.getElementById('grCv'), img = document.getElementById('grImg');
   if(!cv) return;
-  const src = 'img/jobs/' + curJob() + '_' + (isBoy() ? 'boy' : 'girl') + '.png';
+  /* 직업 일러스트: webp → png → 없으면 벡터 캐릭터 */
+  const base = 'img/jobs/' + curJob() + '_' + (isBoy() ? 'boy' : 'girl');
+  let tried = 0;
   img.onload = () => { img.style.display = 'block'; cv.style.visibility = 'hidden'; };
-  img.onerror = () => { img.style.display = 'none'; cv.style.visibility = 'visible'; };
-  img.src = src;
+  img.onerror = () => {
+    tried++;
+    if(tried === 1){ img.src = base + '.png'; return; }
+    img.style.display = 'none'; cv.style.visibility = 'visible';
+  };
+  img.src = base + '.webp';
   const g = cv.getContext('2d');
   if(grAnim) { cancelAnimationFrame(grAnim); grAnim = null; }
   const j = JOBS[curJob()];
