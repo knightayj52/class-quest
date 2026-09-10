@@ -5692,8 +5692,8 @@ const JOBGEAR = {
       g.save(); g.translate(10.6,-37); g.rotate(0.12);
       g.strokeStyle='#8a6a3a'; g.lineWidth=1.7; g.lineCap='round';
       g.beginPath(); g.moveTo(0,2); g.lineTo(-1,-20); g.stroke();
-      const gl=0.6+Math.sin(t*4)*0.4;
-      g.fillStyle='rgba(255,220,110,'+(gl*0.5)+')'; g.beginPath(); g.arc(-1,-22,5.2,0,7); g.fill();
+      if(!grSmall){ const gl=0.6+Math.sin(t*4)*0.4;
+        g.fillStyle='rgba(255,220,110,'+(gl*0.5)+')'; g.beginPath(); g.arc(-1,-22,5.2,0,7); g.fill(); }
       g.fillStyle='#ffd45e'; g.font=efont(8); g.textAlign='center'; g.fillText('✦',-1,-19.4);
       g.restore();
       // 고깔모자
@@ -5720,12 +5720,14 @@ const JOBGEAR = {
       g.fillStyle='#7ed6a5'; g.fillRect(-6.4,-45,12.8,2); // 초록 띠
       // 잎 펜던트
       g.fillStyle='#5fc98d'; g.beginPath(); g.ellipse(0,-50,1.7,2.9,0.5,0,7); g.fill();
-      // 지팡이 대신 치유 오라
-      const a=0.25+Math.sin(t*2.5)*0.15;
-      g.strokeStyle='rgba(126,214,165,'+a+')'; g.lineWidth=1.4;
-      g.beginPath(); g.arc(0,-45,17,0,7); g.stroke();
-      g.fillStyle='#7ed6a5'; g.font=efont(6); g.textAlign='center';
-      g.globalAlpha=0.5+Math.sin(t*3)*0.3; g.fillText('✚',13,-58); g.fillText('✚',-13,-46); g.globalAlpha=1;
+      // 지팡이 대신 치유 오라 (맵에서는 생략)
+      if(!grSmall){
+        const a=0.25+Math.sin(t*2.5)*0.15;
+        g.strokeStyle='rgba(126,214,165,'+a+')'; g.lineWidth=1.4;
+        g.beginPath(); g.arc(0,-45,17,0,7); g.stroke();
+        g.fillStyle='#7ed6a5'; g.font=efont(6); g.textAlign='center';
+        g.globalAlpha=0.5+Math.sin(t*3)*0.3; g.fillText('✚',13,-58); g.fillText('✚',-13,-46); g.globalAlpha=1;
+      }
       // 꽃 화관
       const cols=['#ff9ecb','#ffd76e','#9be8c9','#ffb3c6','#c9a6ff'];
       for(let i=0;i<5;i++){ const ang=Math.PI*(1.08+i*0.21);
@@ -5887,6 +5889,7 @@ const SIDEGEAR = {
 };
 
 
+let grSmall = false;   // 맵처럼 작게 그릴 때 true → 오라·파티클 생략
 const JOB_REQ = { t1:{lv:10, main:15}, t2:{lv:20, main:28, sub:12}, t3:{lv:30}, side:{lv:15} };
 const FX_LABEL = {
   speed:v=>'이동 속도 +'+Math.round((v-1)*100)+'%', coin:v=>'골드 획득 +'+Math.round((v-1)*100)+'%',
@@ -6154,7 +6157,9 @@ function gearOf(id){
 function drawJobGear(g, id, t, layer){
   const base = gearOf(id), ex = JOBGEAR_EXTRA[id], side = SIDEGEAR[id];
   const call = obj => { if(obj && obj[layer]) { g.save(); try{ obj[layer](g, t); }catch(e){} g.restore(); } };
-  call(base); call(ex); call(side);
+  call(base);
+  if(!grSmall){ call(ex); call(side); }      // 맵에서는 이펙트·부업 소품 생략
+  else if(ex && layer === 'lower') call(ex); // 전설 직업 의상은 맵에서도 유지
 }
 /* 캐릭터 + 장비를 한 번에 그림 (성장 화면 / 프리뷰 공용) */
 function drawHeroBig(g, cx, cy, scale, t){
@@ -6226,6 +6231,41 @@ function grDrawChar(){
   loop();
 }
 
+
+
+/* -- 맵 캐릭터: 확대 + 직업 장비 표시 --
+   drawPrincess를 감싸서, 플레이어를 그릴 때만 배율을 키우고 장비를 얹습니다.
+   NPC·미리보기(고정 배율 2.2 / 1.0)는 그대로 둡니다. */
+const MAP_SCALE = 1.42;                 // 맵 캐릭터 확대 배율
+(function grMapGear(){
+  const orig = window.drawPrincess;
+  if(typeof orig !== 'function') return;
+  window.drawPrincess = function(g, x, y, s, walkT, moving, o){
+    /* 플레이어 맵 렌더링만 확대·장비 적용 (s가 0.9~1.0 구간) */
+    const isMapPlayer = (s >= 0.85 && s <= 1.05);
+    if(!isMapPlayer) return orig.call(this, g, x, y, s, walkT, moving, o);
+    const sc = s * MAP_SCALE;
+    const t = (typeof T === 'number') ? T : 0;
+    grSmall = true;
+    let id = 'adventurer', sides = [];
+    try{ id = curJob(); sides = (S.school && S.school.side) || []; }catch(e){}
+    /* 뒤 레이어 */
+    g.save(); g.translate(x, y); g.scale(sc, sc);
+    try{ drawJobGear(g, id, t, 'back'); sides.forEach(v => drawJobGear(g, v, t, 'back')); }catch(e){}
+    g.restore();
+    /* 캐릭터 */
+    g.save(); try{ orig.call(this, g, x, y, sc, walkT, moving, o); }catch(e){} g.restore();
+    /* 앞 레이어 */
+    g.save(); g.translate(x, y); g.scale(sc, sc);
+    try{
+      drawJobGear(g, id, t, 'lower');
+      drawJobGear(g, id, t, 'front');
+      sides.forEach(v => drawJobGear(g, v, t, 'front'));
+    }catch(e){}
+    g.restore();
+    grSmall = false;
+  };
+})();
 
 /* -- 이름표를 "직업 + 이름"으로 (왕자/공주 호칭 제거) -- */
 function grTitleTag(){
