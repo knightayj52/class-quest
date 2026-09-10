@@ -5355,79 +5355,92 @@ async function openSchoolMissions(){
   }
 }
 
+function schStatusText(st){
+  return {'없음':'', '자동':'✅ 완료', '대기':'⏳ 선생님 확인 중', '검사대기':'⏳ 검사 기다리는 중',
+          '승인':'✅ 완료', '검사완료':'✅ 완료', '반려':'다시 해볼까요'}[st] || '';
+}
+/* 미션 카드 한 장 */
+function schCard(m, kind){
+  const done = m.status !== '없음' && m.status !== '반려';
+  const star = m.grade === '우수' ? ' ⭐우수' : '';
+  const statTxt = m.stat && STATN[m.stat] ? ' · ' + STATN[m.stat].e + STATN[m.stat].n : '';
+  const right = done
+    ? '<div class="small" style="white-space:nowrap;text-align:right;min-width:74px">' + schStatusText(m.status) + '</div>'
+    : '<button class="pillbtn schDo" data-m="' + m.id + '" data-k="' + (kind||'mission') + '" style="white-space:nowrap">했어요 ✓</button>';
+  return '<div class="card" style="padding:12px;' + (done ? 'opacity:.72;background:#f6f9f4' : '') + '">'
+    + '<div class="rowline">'
+    + '<div class="grow"><div style="font-size:16px">' + m.e + ' ' + m.name + star + '</div>'
+    + '<div class="small">' + (m.desc || '') + '</div>'
+    + '<div class="small">⭐' + m.xp + ' · 🪙' + m.coins + statTxt + '</div></div>'
+    + right + '</div></div>';
+}
 function renderSchoolMissions(d, stale){
-  const S_ = st => ({'없음':'', '자동':'✅ 완료', '대기':'⏳ 선생님 확인 중', '검사대기':'⏳ 검사 기다리는 중',
-                     '승인':'✅ 완료', '검사완료':'✅ 완료', '반려':'다시 해볼까요'})[st] || '';
   let h = stale ? '<div class="small" style="text-align:center;color:#a99bc0;padding:2px">최신 정보 확인 중...</div>' : '';
-  if(d.notice) h += `<div class="card" style="padding:12px;background:#fff6df;border-color:#e8c86a">📢 ${d.notice}</div>`;
+  if(d.notice) h += '<div class="card" style="padding:12px;background:#fff6df;border-color:#e8c86a">📢 ' + d.notice + '</div>';
   if(d.goal){
     const pct = Math.min(100, d.goal.current / d.goal.target * 100);
-    h += `<div class="card" style="padding:12px">
-      <div style="font-size:15px">🏰 우리 반 함께 목표 · <b>${d.goal.name}</b></div>
-      <div class="small">${d.goal.current} / ${d.goal.target} · 보상 ${d.goal.reward}</div>
-      <div style="height:14px;background:#eee3ff;border:2px solid #6b5a8a;border-radius:99px;overflow:hidden;margin-top:6px">
-        <div style="height:100%;width:${pct}%;background:linear-gradient(90deg,#ffd93e,#ff8fb8)"></div></div></div>`;
+    h += '<div class="card" style="padding:12px">'
+      + '<div style="font-size:15px">🏰 우리 반 함께 목표 · <b>' + d.goal.name + '</b></div>'
+      + '<div class="small">' + d.goal.current + ' / ' + d.goal.target + ' · 보상 ' + d.goal.reward + '</div>'
+      + '<div class="statbar" style="height:14px"><div class="statfill" style="width:' + pct + '%;background:linear-gradient(90deg,#ffd93e,#ff8fb8)"></div></div></div>';
   }
-  const doneN = d.missions.filter(m => ['자동','승인','검사완료','대기','검사대기'].includes(m.status)).length;
-  h += `<div class="card" style="padding:10px;text-align:center">오늘 ${doneN} / ${d.missions.length} 완료 · ${d.date} (${d.day})</div>`;
+  const all = (d.missions || []).concat(d.goods || []);
+  const doneN = all.filter(m => m.status !== '없음' && m.status !== '반려').length;
+  h += '<div class="card" style="padding:10px;text-align:center">오늘 <b>' + doneN + ' / ' + all.length + '</b> 완료 · ' + d.date + ' (' + d.day + ')</div>';
 
-  d.missions.forEach(m => {
-    const done = m.status !== '없음' && m.status !== '반려';
-    const wait = m.status === '대기' || m.status === '검사대기';
-    const star = m.grade === '우수' ? ' ⭐우수' : '';
-    h += `<div class="card" style="padding:12px;${done && !wait ? 'opacity:.75' : ''}">
-      <div style="display:flex;justify-content:space-between;align-items:center;gap:10px">
-        <div style="flex:1">
-          <div style="font-size:16px">${m.e} ${m.name}${star}</div>
-          <div class="small">${m.desc || ''}</div>
-          <div class="small">⭐${m.xp} · 🪙${m.coins}${m.stat ? ' · ' + (STATN[m.stat] ? STATN[m.stat].e + STATN[m.stat].n : m.stat) : ''}</div>
-        </div>
-        ${done
-          ? `<div class="small" style="white-space:nowrap;text-align:right">${S_(m.status)}</div>`
-          : `<button class="btn schDo" data-m="${m.id}" style="white-space:nowrap">완료!</button>`}
-      </div></div>`;
-  });
-
+  /* 오늘의 착한일 */
+  if(d.goods && d.goods.length){
+    h += '<div class="card" style="padding:9px;text-align:center;background:#eaf7ee;border-color:#a8d8b8">'
+      + '🌱 오늘의 착한 일 <span class="small">· 우리 반이 함께 실천해요</span></div>';
+    d.goods.forEach(g => h += schCard(g, 'good'));
+  }
+  /* 학교 임무 */
+  if(d.missions && d.missions.length){
+    h += '<div class="card" style="padding:9px;text-align:center;background:#eef2fb;border-color:#b8c8e8">🏫 학교에서 하는 일</div>';
+    d.missions.forEach(m => h += schCard(m, 'mission'));
+  }
+  /* 개별 퀘스트 */
   if(d.personal && d.personal.length){
-    h += '<div class="card" style="padding:10px;text-align:center;background:#f0e9ff">🎯 나만의 ' + SB.mission + '</div>';
+    h += '<div class="card" style="padding:9px;text-align:center;background:#f5eeff;border-color:#c9b8e8">🎯 나만의 ' + SB.mission + '</div>';
     d.personal.forEach(q => {
       const wait = q.status === '진행';
-      h += `<div class="card" style="padding:12px">
-        <div style="font-size:16px">🎯 ${q.title}</div>
-        <div class="small">${q.desc || ''}${q.due ? ' · 마감 ' + q.due : ''}</div>
-        <div class="small">⭐${q.xp} · 🪙${q.coins}</div>
-        <div class="small" style="margin-top:6px">${wait ? '⏳ 선생님 확인을 기다려요' : '✅ 완료'}</div></div>`;
+      h += '<div class="card" style="padding:12px">'
+        + '<div style="font-size:16px">🎯 ' + q.title + '</div>'
+        + '<div class="small">' + (q.desc || '') + (q.due ? ' · 마감 ' + q.due : '') + '</div>'
+        + '<div class="small">⭐' + q.xp + ' · 🪙' + q.coins + '</div>'
+        + '<div class="small" style="margin-top:6px">' + (wait ? '⏳ 선생님 확인을 기다려요' : '✅ 완료') + '</div></div>';
     });
   }
-  h += `<div style="display:flex;gap:8px;margin-top:10px">
-      <button id="schShop" class="btn" style="flex:1">🎫 ${SB.shop}</button>
-      <button id="schRefresh" class="btn" style="flex:1">🔄 새로고침</button>
-    </div>
-    <div class="small" style="text-align:center;margin-top:10px">
-      ${S.school.name} (${S.school.id}) · <a href="#" id="schOut" style="color:#8a7ba0">로그아웃</a></div>`;
+  h += '<div class="rowline" style="margin-top:10px">'
+    + '<button class="pillbtn grow" id="schShop">🎫 ' + SB.shop + '</button>'
+    + '<button class="pillbtn gray grow" id="schRefresh">🔄 새로고침</button></div>'
+    + '<div class="small" style="text-align:center;margin-top:10px">'
+    + S.school.name + ' (' + S.school.id + ') · <a href="#" id="schOut" style="color:#8a7ba0">로그아웃</a></div>';
 
   document.getElementById('mbody').innerHTML = h;
   document.querySelectorAll('.schDo').forEach(b =>
-    b.addEventListener('pointerdown', () => schComplete(b.dataset.m, b)));
+    b.addEventListener('pointerdown', () => schComplete(b.dataset.m, b, b.dataset.k)));
   document.getElementById('schRefresh').addEventListener('pointerdown', openSchoolMissions);
   document.getElementById('schShop').addEventListener('pointerdown', openSchoolShop);
   document.getElementById('schOut').addEventListener('click', e => { e.preventDefault(); schLogout(); });
 }
 
-/* -- 미션 완료 신청 (낙관적 UI: 화면 먼저, 서버는 뒤에서) -- */
-async function schComplete(mid, btn){
+/* -- 미션 완료 신청 (누르면 즉시 잠기고 완료 표시) -- */
+async function schComplete(mid, btn, kind){
   if(schBusy) return;
-  const mi = SCH && SCH.missions.find(x => x.id === mid);
-  if(!mi) return;
+  const pool = (SCH.missions || []).concat(SCH.goods || []);
+  const mi = pool.find(x => x.id === mid);
+  if(!mi || mi.status !== '없음') return;
   schBusy = true;
-  const instant = mi.type === '즉시';
+  const instant = mi.type === '즉시' || mi.type === '착한일';
   if(btn){
-    btn.outerHTML = '<div class="small" style="white-space:nowrap;text-align:right">'
-      + (instant ? '완료' : '보내는 중...') + '</div>';
+    btn.disabled = true;
+    btn.outerHTML = '<div class="small" style="white-space:nowrap;text-align:right;min-width:74px">'
+      + (instant ? '✅ 완료' : '⏳ 보내는 중...') + '</div>';
   }
   if(instant){
     applyReward({xp:mi.xp, coins:mi.coins});
-    sYes(); confetti(14); toast('완료! ' + mi.name);
+    sYes(); confetti(14); toast((kind === 'good' ? '🌱 ' : '🎉 ') + mi.name + ' 완료!');
     mi.status = '자동'; schSaveCache(SCH);
   }
   try{
@@ -5438,11 +5451,11 @@ async function schComplete(mid, btn){
       mi.status = '없음';
     } else {
       mi.status = r.status;
-      if(!instant){ sYes(); toast('선생님께 보냈어요!'); }
+      if(!instant){ sYes(); toast('📨 선생님께 보냈어요!'); }
     }
     schSaveCache(SCH); renderSchoolMissions(SCH);
   }catch(e){
-    toast('연결에 실패했어요');
+    toast('연결에 실패했어요 📡');
     if(instant) applyReward({xp:-mi.xp, coins:-mi.coins});
     mi.status = '없음'; renderSchoolMissions(SCH);
   }
