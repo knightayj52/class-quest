@@ -5314,10 +5314,72 @@ function openSchoolLogin(){
   });
 }
 function schLogout(){
-  S.school = {id:null, pin:null, name:'', pts:S.school?S.school.pts:0, job:'adventurer', jobLv:0, lastSync:null};
-  SCH = null; saveGame(); closeModal(); toast('로그아웃했어요');
+  if(S.school && S.school.id){ schWriteSlot(S.school.id); schPushSave(true); }
+  SCH = null; closeModal();
+  setTimeout(() => location.reload(), 300);           // 새로고침 → 로그인 화면부터
 }
 
+
+
+/* -- 학생별 저장 슬롯 + 서버 백업 --
+   게임 진행(S)은 원래 기기당 1개였습니다. 공용 태블릿에서 계정을 바꾸면 남의 캐릭터를 이어받게 되므로,
+   학생별로 슬롯을 나누고 서버에도 백업합니다. 어느 태블릿에서 로그인해도 자기 캐릭터가 나옵니다. */
+const SLOT_PREFIX = 'lumi-slot:';
+let schLastPush = 0, schPushTimer = null;
+function schSlotKey(id){ return SLOT_PREFIX + id; }
+function schWriteSlot(id){
+  if(!id || !S) return;
+  try{ localStorage.setItem(schSlotKey(id), JSON.stringify({t:Date.now(), level:S.level, data:buildSaveJson()})); }catch(e){}
+}
+function schReadSlot(id){
+  try{ const o = JSON.parse(localStorage.getItem(schSlotKey(id)) || 'null'); return (o && o.data) ? o : null; }catch(e){ return null; }
+}
+function schApplySave(json){
+  const d = parseSave(json); if(!d) return false;
+  applyLoaded(d);
+  schInit();
+  try{ pendingSex = (S.sex === 'boy') ? 'boy' : 'girl'; updateIntroChar(); }catch(e){}
+  try{ updateHUD(); }catch(e){}
+  return true;
+}
+/* 서버로 밀어올리기 (30초에 한 번까지, 중요한 순간엔 즉시) */
+async function schPushSave(force){
+  if(!schLogged() || !S) return;
+  const nowT = Date.now();
+  if(!force && nowT - schLastPush < 30000){
+    if(!schPushTimer) schPushTimer = setTimeout(() => { schPushTimer = null; schPushSave(true); }, 30000 - (nowT - schLastPush) + 200);
+    return;
+  }
+  schLastPush = nowT;
+  try{
+    await schPost({action:'saveGame', ...schAuth(), data:buildSaveJson(), t:nowT, level:S.level});
+  }catch(e){}
+}
+/* 로그인 직후: 이 학생의 진행 데이터를 준비 */
+async function schPrepareSave(id, pin){
+  const local = schReadSlot(id);
+  let server = null;
+  try{ const r = await schGet({action:'loadGame', id, pin}); if(r && r.ok && r.data) server = r; }catch(e){}
+  let pick = null;
+  if(local && server) pick = (+server.t > +local.t) ? server : local;
+  else pick = local || server;
+  if(pick){ schApplySave(pick.data); return pick === server ? 'server' : 'local'; }
+  /* 둘 다 없음 → 새 캐릭터 */
+  S = freshState(); schInit();
+  try{ pendingSex = 'girl'; updateIntroChar(); updateHUD(); }catch(e){}
+  return 'new';
+}
+/* saveGame을 감싸서 슬롯에도 쓰고 서버에도 올림 */
+(function schSaveHook(){
+  const orig = window.saveGame;
+  if(typeof orig !== 'function') return;
+  window.saveGame = async function(){
+    const r = await orig.apply(this, arguments);
+    try{ if(schLogged()){ schWriteSlot(S.school.id); schPushSave(false); } }catch(e){}
+    return r;
+  };
+  document.addEventListener('visibilitychange', () => { if(document.hidden) schPushSave(true); });
+})();
 
 /* -- 시작 화면 로그인 게이트 --
    앱을 열면 인트로보다 먼저 학번·PIN을 묻습니다. 로그인해야 게임에 들어갑니다.
@@ -5358,13 +5420,16 @@ function schOpenGate(msg, prefill){
       const d = await schGet({action:'login', id, pin});
       if(!d.ok){ say(d.error || '다시 확인해 주세요'); return; }
       schInit();
+      say('내 캐릭터를 불러오는 중…');
+      /* 이전 학생 데이터가 남아 있으면 그 학생 슬롯에 보관 */
+      if(S.school.id && S.school.id !== id) schWriteSlot(S.school.id);
+      const how = await schPrepareSave(id, pin);
       S.school.id = id; S.school.pin = pin; S.school.name = d.name;
       if(d.brand) SB = d.brand;
-      if(d.sex && !S.sex) S.sex = d.sex;
       try{ localStorage.setItem('schLastId', id); }catch(e){}
       saveGame();
       document.getElementById('schGate').remove();
-      schAfterGate(d);
+      schAfterGate(d, how);
     }catch(e){ say('인터넷 연결을 확인해 주세요 📡'); }
   };
   document.getElementById('gateGo').addEventListener('pointerdown', go);
@@ -5373,7 +5438,9 @@ function schOpenGate(msg, prefill){
   setTimeout(() => { try{ (prefill ? pinEl : idEl).focus(); }catch(e){} }, 200);
 }
 /* 로그인 후: 인트로에 이름 자동 입력 + 안내 */
-function schAfterGate(d){
+function schAfterGate(d, how){
+  if(how === 'server' && typeof toast === 'function') setTimeout(() => toast('☁️ 서버에서 내 캐릭터를 불러왔어요'), 900);
+  if(how === 'new' && typeof toast === 'function') setTimeout(() => toast('✨ 새 캐릭터를 만들어요!'), 900);
   const nm = document.getElementById('nameinput');
   if(nm && (!nm.value || nm.value === '루미' || nm.value === (S && S.name))) {
     if(d.name) nm.value = d.name.slice(0, 6);
@@ -5392,8 +5459,9 @@ function schAfterGate(d){
     card.insertBefore(bar, card.firstChild);
     document.getElementById('schSwitch').addEventListener('click', e => {
       e.preventDefault();
-      S.school.id = null; S.school.pin = null; S.school.name = '';
-      saveGame();
+      if(S.school.id){ schWriteSlot(S.school.id); schPushSave(true); }
+      S = freshState(); schInit();                       // 남의 캐릭터가 이어지지 않게 초기화
+      try{ localStorage.removeItem(SAVE_KEY); }catch(e){}
       if(intro) intro.style.display = 'none';
       bar.remove();
       schOpenGate('');
@@ -5408,7 +5476,11 @@ function schAfterGate(d){
     clearInterval(timer);
     schInit();
     const intro = document.getElementById('intro');
-    if(schLogged()){                       // 이미 로그인된 기기 → 그대로 진행
+    if(schLogged()){                       // 이미 로그인된 기기 → 그 학생 슬롯 확인 후 진행
+      const id = S.school.id, pin = S.school.pin;
+      const local = schReadSlot(id);
+      if(local && local.data){ try{ schApplySave(local.data); }catch(e){} }
+      S.school.id = id; S.school.pin = pin;
       if(intro && intro.style.display !== 'none'){
         schGet({action:'login', ...schAuth()}).then(d => { if(d && d.ok) schAfterGate(d); }).catch(()=>{});
       }
@@ -5556,7 +5628,7 @@ async function schComplete(mid, btn, kind){
       mi.status = r.status;
       if(!instant){ sYes(); toast('📨 선생님께 보냈어요!'); }
     }
-    schSaveCache(SCH); renderSchoolMissions(SCH);
+    schSaveCache(SCH); renderSchoolMissions(SCH); schPushSave(true);
   }catch(e){
     toast('연결에 실패했어요 📡');
     if(instant) applyReward({xp:-mi.xp, coins:-mi.coins});
@@ -5565,8 +5637,16 @@ async function schComplete(mid, btn, kind){
   finally{ schBusy = false; }
 }
 
-/* -- 승인된 보상 지급 (합산 적용 + claim 한 번에) -- */
+/* -- 승인된 보상 지급 (합산 적용 + claim 한 번에) --
+   이중 지급 방지: 이미 지급한 항목은 저장 데이터에 기록해 두고 건너뜁니다.
+   (게임 시작 직후 자동 동기화와 임무 화면 열기가 겹쳐도 안전) */
+let schPaying = false;
+function schPaidKey(j){ return j.type + ':' + j.row; }
 async function schPayout(d){
+  if(schPaying) return;                      // 동시에 두 번 실행 방지
+  schInit();
+  if(!Array.isArray(S.school.paid)) S.school.paid = [];
+  const paid = new Set(S.school.paid);
   const jobs = [];
   (d.unclaimed || []).forEach(u => jobs.push({type:'log', row:u.row,
     xp:u.xp, coins:u.coins, stat:u.stat, label:u.missionName}));
@@ -5574,22 +5654,33 @@ async function schPayout(d){
     xp:a.xp, coins:a.coins, stat:a.stat, val:a.val, label:a.reason || a.kind}));
   (d.personalDone || []).forEach(p => jobs.push({type:'personal', row:p.row,
     xp:p.xp, coins:p.coins, stat:p.stat, label:p.title}));
-  if(!jobs.length) return;
-  const total = {xp:0, coins:0, stats:{}};
-  jobs.forEach(j => {
-    if(j.xp) total.xp += j.xp;
-    if(j.coins) total.coins += j.coins;
-    if(j.stat && (j.val || j.type !== 'award'))
-      total.stats[j.stat] = (total.stats[j.stat] || 0) + (j.val || 1);
-  });
-  const rw = {};
-  if(total.xp) rw.xp = total.xp;
-  if(total.coins) rw.coins = total.coins;
-  if(Object.keys(total.stats).length) rw.stats = total.stats;
-  applyReward(rw); confetti(26);
-  banner('보상이 도착했어요!',
-    jobs.map(j => j.label).slice(0,3).join(', ') + (jobs.length > 3 ? ' 외 ' + (jobs.length-3) + '건' : ''));
-  try{ await schPost({action:'claim', ...schAuth(), items: jobs.map(j => ({type:j.type, row:j.row}))}); }catch(e){}
+  const fresh = jobs.filter(j => !paid.has(schPaidKey(j)));
+  /* 예전에 지급했지만 서버 확인(claim)이 실패했던 건은 다시 확인만 보냄 */
+  const reclaim = jobs.filter(j => paid.has(schPaidKey(j))).map(j => ({type:j.type, row:j.row}));
+  if(!fresh.length && !reclaim.length) return;
+  schPaying = true;
+  try{
+    if(fresh.length){
+      fresh.forEach(j => S.school.paid.push(schPaidKey(j)));
+      if(S.school.paid.length > 400) S.school.paid = S.school.paid.slice(-300);
+      const total = {xp:0, coins:0, stats:{}};
+      fresh.forEach(j => {
+        if(j.xp) total.xp += j.xp;
+        if(j.coins) total.coins += j.coins;
+        if(j.stat && (j.val || j.type !== 'award'))
+          total.stats[j.stat] = (total.stats[j.stat] || 0) + (j.val || 1);
+      });
+      const rw = {};
+      if(total.xp) rw.xp = total.xp;
+      if(total.coins) rw.coins = total.coins;
+      if(Object.keys(total.stats).length) rw.stats = total.stats;
+      applyReward(rw); saveGame(); confetti(26);
+      banner('보상이 도착했어요!',
+        fresh.map(j => j.label).slice(0,3).join(', ') + (fresh.length > 3 ? ' 외 ' + (fresh.length-3) + '건' : ''));
+    }
+    const items = fresh.map(j => ({type:j.type, row:j.row})).concat(reclaim);
+    try{ await schPost({action:'claim', ...schAuth(), items}); }catch(e){}
+  } finally { schPaying = false; }
 }
 
 /* -- 학급 상점(현실 쿠폰) -- */
@@ -5631,7 +5722,7 @@ async function openSchoolShop(){
       b.disabled = true; b.textContent = '…';
       const r = await schPost({action:'buy', ...schAuth(), item:b.dataset.i});
       if(!r.ok){ toast('⚠️ ' + r.error); sNo(); openSchoolShop(); return; }
-      S.coins -= price; sCoin(); updateHUD(); saveGame();
+      S.coins -= price; sCoin(); updateHUD(); saveGame(); schPushSave(true);
       sYes(); confetti(18); banner('쿠폰을 샀어요! 🎫', r.name + ' · 선생님께 보여주세요');
       openSchoolShop();
     }));
@@ -6101,6 +6192,7 @@ function takeJob(id){
   else { S.school.job = id; S.school.jobLv = j.tier; }
   saveGame(); sLevel(); confetti(40);
   try{ updateHUD(); }catch(e){}
+  try{ schPushSave(true); }catch(e){}
   banner(j.e + ' ' + j.n + '이(가) 되었어요!', j.desc);
   openGrowth(); grBurst();
 }

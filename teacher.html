@@ -240,6 +240,11 @@ async function vSummary(){
   if(d.goal){const pct=Math.min(100,d.goal.current/d.goal.target*100);
     h+='<div class="card"><b>🏰 '+d.goal.name+'</b><div class="small">'+d.goal.current+' / '+d.goal.target+' · '+d.goal.reward+'</div>'
       +'<div class="goal"><div style="width:'+pct+'%"></div></div></div>';}
+  if(d.goods&&d.goods.length){
+    h+='<div class="card"><b>🌱 오늘의 착한 일</b><div class="small">반 전체에 같은 2개가 나갑니다 · 시트 [착한일풀]에서 편집</div>';
+    d.goods.forEach(g=>h+='<div class="item"><div>'+g.e+' '+g.name+'<span class="badge">'+g.cat+'</span></div><div><b>'+g.done+'</b><span class="small">명 실천</span></div></div>');
+    h+='</div>';
+  }
   h+='<div class="card"><b>📢 '+B.world+' 공지</b><textarea id="ntc" placeholder="게임 접속 시 아이들에게 보여요"></textarea>'
     +'<button class="big" id="btnNtc">공지 저장</button></div>';
   h+='<div class="card"><b>📅 '+d.date+'</b><table><tr><th>이름</th><th>오늘</th><th>이번주</th><th>누적</th><th>XP</th></tr>';
