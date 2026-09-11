@@ -6761,26 +6761,31 @@ function fxDirOf(){
     if(!art && dir !== 'front'){ key = fxArtKey('front', false); art = fxGetArt(key); }
     if(!art) return origDraw.apply(this, arguments);   // 아직 로딩 중이거나 없는 직업 → 벡터
     const hasWalk = moving && !MAP_ART.missing[fxArtKey(dir, true)];
+    /* 캐릭터 표시 크기 — 게임 전역의 W/H(화면 크기)와 겹치지 않게 별도 이름 사용 */
+    const chH = MAP_ART.height * s;
+    const iw = art.naturalWidth || art.width || 680;
+    const ih = art.naturalHeight || art.height || 850;
+    const chW = chH * (iw / ih);
     /* 걷기 모션: 위아래 통통 + 좌우 기울기 + 살짝 흔들림 */
     const ph = walkT * 9;
     const k = hasWalk ? 0.35 : 0.5;      // 걷기 그림이 있으면 흔들림을 더 줄임
-    const bob   = moving ? Math.abs(Math.sin(ph)) * H * 0.022 * (hasWalk ? 0.8 : 1) : 0;
+    const bob   = moving ? Math.abs(Math.sin(ph)) * chH * 0.022 * (hasWalk ? 0.8 : 1) : 0;
     const tilt  = moving ? Math.sin(ph) * 0.022 * k * 2 : 0;   // 약 1.4도 (기존 3도에서 축소)
-    const sway  = moving ? Math.cos(ph) * W * 0.010 : 0;
+    const sway  = moving ? Math.cos(ph) * chW * 0.010 : 0;
     const squash= moving ? 1 + Math.abs(Math.cos(ph)) * 0.012 : 1;
     const flip = (dir === 'side' && (player.lastdx || 0) < 0);
     g.save();
     /* 그림자 — 뛸 때 살짝 작아짐 */
     g.globalAlpha = 0.16; g.fillStyle = '#000';
-    const shs = 1 - (bob / (H * 0.030 || 1)) * 0.12;
-    g.beginPath(); g.ellipse(x + sway * 0.4, y - 1, W * 0.26 * shs, H * 0.048 * shs, 0, 0, 7); g.fill();
+    const shs = 1 - (bob / (chH * 0.030 || 1)) * 0.12;
+    g.beginPath(); g.ellipse(x + sway * 0.4, y - 1, chW * 0.26 * shs, chH * 0.048 * shs, 0, 0, 7); g.fill();
     g.globalAlpha = 1;
     g.translate(x + sway, y - bob);
     g.rotate(tilt);
     if(flip) g.scale(-1, 1);
     g.scale(1, squash);
     g.imageSmoothingEnabled = true;
-    try{ g.drawImage(art, -W/2, -H, W, H); }catch(e){}
+    try{ g.drawImage(art, -chW/2, -chH, chW, chH); }catch(e){}
     g.restore();
   };
 })();
